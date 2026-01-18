@@ -12,7 +12,9 @@ A native Swift implementation of [Flux.2 Dev](https://blackforestlabs.ai/) image
 - **MLX Acceleration**: Optimized for Apple Silicon (M1/M2/M3/M4) using MLX
 - **Quantized Models**: Support for 8-bit quantized transformer (~32GB VRAM)
 - **Text-to-Image**: Generate images from text prompts
-- **CLI Tool**: Simple command-line interface for image generation
+- **Image-to-Image**: Multi-reference editing with configurable strength
+- **Prompt Upsampling**: Enhance prompts with Mistral before generation
+- **CLI Tool**: Full-featured command-line interface for image generation
 
 ## Requirements
 
@@ -69,6 +71,22 @@ flux2 t2i "cosmic nebula in deep space" \
   --steps 30 \
   --checkpoint 5 \
   --output nebula.png
+
+# Image-to-Image with reference images
+flux2 i2i "make the cat wearing the jacket" \
+  --images cat.png \
+  --images jacket.jpg \
+  --strength 0.7 \
+  --steps 28 \
+  --output cat_with_jacket.png
+
+# Multi-reference with prompt upsampling
+flux2 i2i "place the subject in this background" \
+  --images subject.png \
+  --images background.png \
+  --strength 0.6 \
+  --upsample-prompt \
+  --output composite.png
 ```
 
 See [CLI Documentation](docs/CLI.md) for all options.
@@ -107,18 +125,19 @@ Text encoding uses [Mistral Small 3.2](https://github.com/VincentGourbin/mistral
 
 ## Current Limitations
 
-- **Performance**: Generation is slow (~20 min for 256×256, ~1.7h for 512×512)
+- **Performance**: Generation takes ~15-20 min for 1024×1024 images
 - **Memory**: Requires 64GB+ unified memory
-- **Text-to-Image only**: Image-to-Image not yet implemented
 - **No LoRA support**: Adapter loading not yet available
 
 ## Roadmap
 
 See [GitHub Issues](https://github.com/VincentGourbin/flux-2-swift-mlx/issues) for planned features:
 
+- [x] Text-to-Image generation
+- [x] Image-to-Image support with multi-reference editing
+- [x] Prompt upsampling
 - [ ] Performance optimizations
 - [ ] Demo SwiftUI application
-- [ ] Image-to-Image support
 - [ ] LoRA adapter support
 - [ ] Flux.2 Klein (smaller model)
 

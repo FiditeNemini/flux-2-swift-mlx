@@ -1,7 +1,5 @@
 # Flux.2 CLI Documentation
 
-> **⚠️ WORK IN PROGRESS** - Some features may not be fully implemented yet.
-
 The `flux2` command-line tool provides access to Flux.2 image generation on Mac with MLX.
 
 ## Commands
@@ -9,7 +7,7 @@ The `flux2` command-line tool provides access to Flux.2 image generation on Mac 
 | Command | Description |
 |---------|-------------|
 | `t2i` | Text-to-Image generation (default) |
-| `i2i` | Image-to-Image generation *(not yet implemented)* |
+| `i2i` | Image-to-Image generation with multi-reference support |
 | `download` | Download required models |
 | `info` | Show system and model information |
 
@@ -88,14 +86,12 @@ flux2 t2i "landscape painting" \
 
 ## Image-to-Image (i2i)
 
-> ⚠️ **Not yet implemented** - This feature is planned for a future release.
-
-Generate images using reference images as guidance.
+Generate images using reference images as guidance. Supports single or multi-reference editing.
 
 ### Usage
 
 ```bash
-flux2 i2i <prompt> --images <image1> [image2] [image3] [options]
+flux2 i2i <prompt> --images <image1> [--images <image2>] [--images <image3>] [options]
 ```
 
 ### Arguments
@@ -110,11 +106,89 @@ flux2 i2i <prompt> --images <image1> [image2] [image3] [options]
 |--------|-------|---------|-------------|
 | `--images` | `-i` | required | Reference image(s), 1-3 images |
 | `--output` | `-o` | `output.png` | Output file path |
-| `--steps` | `-s` | `50` | Number of inference steps |
+| `--width` | `-w` | from image | Output width (default: first reference image) |
+| `--height` | `-h` | from image | Output height (default: first reference image) |
+| `--steps` | `-s` | `28` | Number of **effective** denoising steps |
+| `--total-steps` | | false | Interpret `--steps` as total steps before strength reduction |
+| `--strength` | | `0.8` | Denoising strength (0.0-1.0). Lower = preserve more original |
 | `--guidance` | `-g` | `4.0` | Guidance scale |
 | `--seed` | | random | Random seed |
+| `--upsample-prompt` | | false | Enhance prompt with Mistral before encoding |
+| `--checkpoint` | | | Save intermediate images every N steps |
+| `--profile` | | false | Show detailed performance profiling |
 | `--text-quant` | | `8bit` | Text encoder quantization |
 | `--transformer-quant` | | `qint8` | Transformer quantization |
+
+### Understanding Strength
+
+The `--strength` parameter controls how much of the original image is preserved:
+
+| Strength | Effect | Use Case |
+|----------|--------|----------|
+| `1.0` | Full denoising (ignores reference) | Maximum creativity |
+| `0.8` | 80% new, 20% original | Default - good balance |
+| `0.5` | 50/50 mix | Moderate changes |
+| `0.3` | 30% new, 70% original | Subtle modifications |
+
+### Understanding Steps
+
+By default, `--steps` specifies **effective steps** (what you actually get):
+
+```bash
+flux2 i2i "prompt" --steps 28 --strength 0.7
+# Output: "Steps: 28 effective (total: 40)"
+```
+
+Use `--total-steps` for the legacy behavior where strength reduces the step count:
+
+```bash
+flux2 i2i "prompt" --steps 28 --strength 0.7 --total-steps
+# Output: "Steps: 19 effective (from 28 total)"
+```
+
+### Examples
+
+**Single reference - style transfer:**
+```bash
+flux2 i2i "transform into a watercolor painting" \
+  --images photo.jpg \
+  --strength 0.7 \
+  --steps 28 \
+  --output watercolor.png
+```
+
+**Multi-reference - combine elements:**
+```bash
+flux2 i2i "make the cat wearing the jacket" \
+  --images cat.png \
+  --images jacket.jpg \
+  --strength 0.7 \
+  --steps 28 \
+  --width 1024 --height 1024 \
+  --output cat_with_jacket.png
+```
+
+**With prompt upsampling:**
+```bash
+flux2 i2i "place the subject in this scene" \
+  --images subject.png \
+  --images background.png \
+  --strength 0.6 \
+  --upsample-prompt \
+  --output composite.png
+```
+
+**Save progress checkpoints:**
+```bash
+flux2 i2i "artistic interpretation" \
+  --images original.jpg \
+  --strength 0.8 \
+  --steps 20 \
+  --checkpoint 5 \
+  --profile \
+  --output artistic.png
+# Saves: artistic_checkpoints/step_005.png, step_010.png, etc.
+```
 
 ---
 

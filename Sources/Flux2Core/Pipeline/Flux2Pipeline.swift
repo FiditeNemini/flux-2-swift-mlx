@@ -337,7 +337,7 @@ public class Flux2Pipeline: @unchecked Sendable {
         let profiler = Flux2Profiler.shared
 
         // === PHASE 1: Text Encoding ===
-        onProgress?(0, steps)
+        // Note: Progress will be reported once denoising loop starts with accurate step count
         Flux2Debug.log("=== PHASE 1: Text Encoding ===")
 
         profiler.start("1. Load Text Encoder")

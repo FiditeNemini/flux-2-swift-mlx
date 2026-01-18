@@ -139,6 +139,94 @@ The prompt upsampling feature uses Mistral to enhance the original prompt with m
 
 ---
 
+## Image-to-Image Examples
+
+### I2I - Artistic Variation (Watercolor)
+
+**Prompt:** `"transform into a beautiful watercolor painting with soft brushstrokes and vibrant colors"`
+
+**Reference:** Cat on beach (1 image)
+
+**Parameters:**
+- Size: 1024x1024
+- Steps: 28 effective
+- Strength: 0.7 (30% original preserved)
+- Prompt upsampling: disabled
+
+| Step 7 | Step 14 | Step 21 | Final (Step 28) |
+|--------|---------|---------|-----------------|
+| ![Step 7](i2i_artistic_variation/step_007.png) | ![Step 14](i2i_artistic_variation/step_014.png) | ![Step 21](i2i_artistic_variation/step_021.png) | ![Final](i2i_artistic_variation/final.png) |
+
+**Command:**
+```bash
+flux2 i2i "transform into a beautiful watercolor painting with soft brushstrokes and vibrant colors" \
+  --images cat_beach_upsampled.png \
+  --strength 0.7 --steps 28 \
+  --checkpoint 7 --profile \
+  --output artistic_variation.png
+```
+
+---
+
+### I2I - Multi-Reference (Cat Wearing Jacket)
+
+**Prompt:** `"make the cat on the first picture wearing the jacket on the second"`
+
+**References:** Cat on beach + Yellow jacket (2 images)
+
+**Parameters:**
+- Size: 1024x1024
+- Steps: 28 effective
+- Strength: 0.7 (30% original preserved)
+- Prompt upsampling: disabled
+
+| Step 7 | Step 14 | Step 21 | Final (Step 28) |
+|--------|---------|---------|-----------------|
+| ![Step 7](i2i_cat_jacket/step_007.png) | ![Step 14](i2i_cat_jacket/step_014.png) | ![Step 21](i2i_cat_jacket/step_021.png) | ![Final](i2i_cat_jacket/final.png) |
+
+**Command:**
+```bash
+flux2 i2i "make the cat on the first picture wearing the jacket on the second" \
+  --images cat.png --images jacket.jpg \
+  --width 1024 --height 1024 \
+  --strength 0.7 --steps 28 \
+  --checkpoint 7 --profile \
+  --output cat_jacket.png
+```
+
+---
+
+### I2I - Multi-Reference with Prompt Upsampling (Cat on Map)
+
+**Prompt:** `"make the cat standing where the red arrow is pointing"`
+
+**References:** Cat on beach + Map (2 images)
+
+**Parameters:**
+- Size: 1024x1024
+- Steps: 28 effective
+- Strength: 0.7 (30% original preserved)
+- Prompt upsampling: **enabled**
+
+| Step 7 | Step 14 | Step 21 | Final (Step 28) |
+|--------|---------|---------|-----------------|
+| ![Step 7](i2i_cat_map_upsampled/step_007.png) | ![Step 14](i2i_cat_map_upsampled/step_014.png) | ![Step 21](i2i_cat_map_upsampled/step_021.png) | ![Final](i2i_cat_map_upsampled/final.png) |
+
+**Command:**
+```bash
+flux2 i2i "make the cat standing where the red arrow is pointing" \
+  --images cat.png --images map.png \
+  --width 1024 --height 1024 \
+  --strength 0.7 --steps 28 \
+  --upsample-prompt \
+  --checkpoint 7 --profile \
+  --output cat_map.png
+```
+
+**Note:** With prompt upsampling, text encoding takes ~1 min vs ~2-4s without, as Mistral enhances the prompt before encoding.
+
+---
+
 ## Hardware
 
 - **Machine:** MacBook Pro 14" (Nov 2023)

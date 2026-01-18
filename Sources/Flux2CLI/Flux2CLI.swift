@@ -210,14 +210,23 @@ struct ImageToImage: AsyncParsableCommand {
     @Option(name: .shortAndLong, help: "Output file path")
     var output: String = "output.png"
 
-    @Option(name: .shortAndLong, help: "Number of inference steps")
+    @Option(name: .shortAndLong, help: "Number of effective denoising steps (what you actually get)")
     var steps: Int = 28
+
+    @Flag(name: .long, help: "Interpret --steps as total steps before strength reduction (legacy behavior)")
+    var totalSteps: Bool = false
 
     @Option(name: .shortAndLong, help: "Guidance scale")
     var guidance: Float = 4.0
 
     @Option(name: .long, help: "Random seed for reproducibility")
     var seed: UInt64?
+
+    @Option(name: .shortAndLong, help: "Output image width (default: from first reference image)")
+    var width: Int?
+
+    @Option(name: .shortAndLong, help: "Output image height (default: from first reference image)")
+    var height: Int?
 
     @Option(name: .long, help: "Denoising strength (0.0-1.0). Lower = preserve more of original image")
     var strength: Float = 0.8
@@ -266,7 +275,30 @@ struct ImageToImage: AsyncParsableCommand {
         }
 
         print("Mode: \(refImages.count == 1 ? "Single-reference" : "Multi-reference") editing")
+
+        // Show output dimensions
+        let outputWidth = width ?? refImages[0].width
+        let outputHeight = height ?? refImages[0].height
+        print("Output size: \(outputWidth)x\(outputHeight)")
         print("Strength: \(strength) (\(Int((1.0 - strength) * 100))% of original preserved)")
+
+        // Calculate actual steps to pass to pipeline
+        // By default, --steps means effective steps (what you get after strength reduction)
+        // With --total-steps flag, it means total steps before strength reduction (legacy)
+        let actualSteps: Int
+        let effectiveSteps: Int
+        if totalSteps {
+            // Legacy behavior: steps is total, effective = steps * strength
+            actualSteps = steps
+            effectiveSteps = Int(ceil(Float(steps) * strength))
+            print("Steps: \(effectiveSteps) effective (from \(steps) total)")
+        } else {
+            // New behavior: steps is effective, calculate total needed
+            // effective = total * strength, so total = effective / strength
+            actualSteps = Int(ceil(Float(steps) / strength))
+            effectiveSteps = steps
+            print("Steps: \(effectiveSteps) effective (total: \(actualSteps))")
+        }
 
         if upsamplePrompt {
             print("Prompt upsampling: enabled")
@@ -308,7 +340,9 @@ struct ImageToImage: AsyncParsableCommand {
         let image = try await pipeline.generateImageToImage(
             prompt: prompt,
             images: refImages,
-            steps: steps,
+            height: height,
+            width: width,
+            steps: actualSteps,
             guidance: guidance,
             seed: seed,
             strength: strength,
