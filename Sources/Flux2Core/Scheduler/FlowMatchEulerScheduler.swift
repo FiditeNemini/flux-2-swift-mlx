@@ -185,6 +185,24 @@ public class FlowMatchEulerScheduler: @unchecked Sendable {
         return (1 - t) * originalSamples + t * noise
     }
 
+    /// Scale noise for image-to-image generation (flow matching)
+    /// This is the core operation for I2I: mix the encoded image with noise based on sigma
+    /// - Parameters:
+    ///   - sample: Original image latents (encoded by VAE)
+    ///   - sigma: Current sigma/noise level (from the time-shifted schedule, in [0, 1] range)
+    ///   - noise: Random noise tensor
+    /// - Returns: Noisy latents: (1 - sigma) * sample + sigma * noise
+    public func scaleNoise(
+        sample: MLXArray,
+        sigma: Float,
+        noise: MLXArray
+    ) -> MLXArray {
+        // For flow matching: x_t = (1 - t) * x_0 + t * noise
+        // sigma is already in [0, 1] range after time shifting
+        let t = MLXArray(sigma)
+        return (1 - t) * sample + t * noise
+    }
+
     /// Get velocity target for training
     public func getVelocity(
         sample: MLXArray,

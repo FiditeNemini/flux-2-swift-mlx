@@ -12,7 +12,8 @@ A native Swift implementation of [Flux.2 Dev](https://blackforestlabs.ai/) image
 - **MLX Acceleration**: Optimized for Apple Silicon (M1/M2/M3/M4) using MLX
 - **Quantized Models**: Support for 8-bit quantized transformer (~32GB VRAM)
 - **Text-to-Image**: Generate images from text prompts
-- **Image-to-Image**: Multi-reference editing with configurable strength
+- **Image-to-Image**: Transform images with text prompts and configurable strength
+- **Multi-Image Conditioning**: Combine elements from up to 3 reference images
 - **Prompt Upsampling**: Enhance prompts with Mistral before generation
 - **CLI Tool**: Full-featured command-line interface for image generation
 
@@ -72,21 +73,26 @@ flux2 t2i "cosmic nebula in deep space" \
   --checkpoint 5 \
   --output nebula.png
 
-# Image-to-Image with reference images
-flux2 i2i "make the cat wearing the jacket" \
-  --images cat.png \
-  --images jacket.jpg \
+# Image-to-Image with reference image
+flux2 i2i "transform into a watercolor painting" \
+  --images photo.jpg \
   --strength 0.7 \
   --steps 28 \
-  --output cat_with_jacket.png
+  --output watercolor.png
 
-# Multi-reference with prompt upsampling
-flux2 i2i "place the subject in this background" \
-  --images subject.png \
-  --images background.png \
+# Image-to-Image with prompt upsampling
+flux2 i2i "make it look cyberpunk" \
+  --images original.jpg \
   --strength 0.6 \
   --upsample-prompt \
-  --output composite.png
+  --output cyberpunk.png
+
+# Multi-image conditioning (combine elements from references)
+flux2 i2i "a cat wearing this jacket" \
+  --images cat.jpg \
+  --images jacket.jpg \
+  --steps 28 \
+  --output cat_jacket.png
 ```
 
 See [CLI Documentation](docs/CLI.md) for all options.
@@ -134,7 +140,8 @@ Text encoding uses [Mistral Small 3.2](https://github.com/VincentGourbin/mistral
 See [GitHub Issues](https://github.com/VincentGourbin/flux-2-swift-mlx/issues) for planned features:
 
 - [x] Text-to-Image generation
-- [x] Image-to-Image support with multi-reference editing
+- [x] Image-to-Image support (single image with strength)
+- [x] Multi-image conditioning (up to 3 reference images)
 - [x] Prompt upsampling
 - [ ] Performance optimizations
 - [ ] Demo SwiftUI application

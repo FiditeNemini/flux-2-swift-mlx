@@ -305,6 +305,66 @@ public enum LatentUtils {
         return (textIds: textIds, imageIds: imageIds, combinedIds: combinedIds)
     }
 
+    // MARK: - Reference Image Position IDs (for I2I)
+
+    /// Generate position IDs for reference image latents in I2I mode
+    /// Each reference image gets a unique T-coordinate (time dimension) to distinguish them
+    /// This follows Flux.2's multi-image handling where images are concatenated along sequence
+    /// - Parameters:
+    ///   - latentHeights: Height of each reference image's latents (H/16 after patchification)
+    ///   - latentWidths: Width of each reference image's latents (W/16 after patchification)
+    ///   - scale: Time scale factor between reference images (default 10)
+    /// - Returns: Position IDs for all reference images concatenated [total_seq_len, 4]
+    public static func generateReferenceImagePositionIDs(
+        latentHeights: [Int],
+        latentWidths: [Int],
+        scale: Int = 10
+    ) -> MLXArray {
+        var allPositions: [Int32] = []
+
+        for (imageIndex, (h, w)) in zip(latentHeights, latentWidths).enumerated() {
+            // Each image gets a unique T-coordinate: scale + scale * imageIndex
+            // This separates reference images in the "time" dimension for attention
+            let tCoord = Int32(scale + scale * imageIndex)
+
+            for hIdx in 0..<h {
+                for wIdx in 0..<w {
+                    // Position encoding: [T, H, W, L=0]
+                    allPositions.append(contentsOf: [tCoord, Int32(hIdx), Int32(wIdx), 0])
+                }
+            }
+        }
+
+        let totalSeqLen = latentHeights.enumerated().reduce(0) { $0 + latentHeights[$1.offset] * latentWidths[$1.offset] }
+        return MLXArray(allPositions).reshaped([totalSeqLen, 4])
+    }
+
+    /// Generate position IDs for a single reference image
+    /// - Parameters:
+    ///   - latentHeight: Height of reference image's latents (H/16)
+    ///   - latentWidth: Width of reference image's latents (W/16)
+    ///   - imageIndex: Index of this image (0, 1, 2, ...)
+    ///   - scale: Time scale factor (default 10)
+    /// - Returns: Position IDs [seq_len, 4]
+    public static func generateSingleReferenceImagePositionIDs(
+        latentHeight: Int,
+        latentWidth: Int,
+        imageIndex: Int,
+        scale: Int = 10
+    ) -> MLXArray {
+        var positions: [Int32] = []
+        let tCoord = Int32(scale + scale * imageIndex)
+
+        for h in 0..<latentHeight {
+            for w in 0..<latentWidth {
+                positions.append(contentsOf: [tCoord, Int32(h), Int32(w), 0])
+            }
+        }
+
+        let seqLen = latentHeight * latentWidth
+        return MLXArray(positions).reshaped([seqLen, 4])
+    }
+
     // MARK: - Image Size Validation
 
     /// Validate and adjust image dimensions

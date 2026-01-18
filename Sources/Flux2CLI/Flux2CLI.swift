@@ -198,13 +198,13 @@ struct TextToImage: AsyncParsableCommand {
 struct ImageToImage: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "i2i",
-        abstract: "Generate image using reference images (single or multi-reference editing)"
+        abstract: "Transform an image using a text prompt (image-to-image)"
     )
 
     @Argument(help: "Text prompt describing the desired output")
     var prompt: String
 
-    @Option(name: .shortAndLong, help: "Reference image(s), 1-3 images")
+    @Option(name: .shortAndLong, help: "Reference image to transform")
     var images: [String]
 
     @Option(name: .shortAndLong, help: "Output file path")
@@ -249,9 +249,13 @@ struct ImageToImage: AsyncParsableCommand {
     func run() async throws {
         let startTime = Date()
 
-        // Validate image count
+        // Validate image count (1-3 reference images)
         guard !images.isEmpty && images.count <= 3 else {
-            throw ValidationError("Provide 1 to 3 reference images")
+            if images.isEmpty {
+                throw ValidationError("Please provide 1-3 reference images with --images")
+            } else {
+                throw ValidationError("Maximum 3 reference images allowed")
+            }
         }
 
         // Validate strength
@@ -274,31 +278,18 @@ struct ImageToImage: AsyncParsableCommand {
             print("Loaded reference image: \(path) (\(image.width)x\(image.height))")
         }
 
-        print("Mode: \(refImages.count == 1 ? "Single-reference" : "Multi-reference") editing")
+        print("Mode: Image-to-Image (Flux.2 conditioning)")
 
         // Show output dimensions
         let outputWidth = width ?? refImages[0].width
         let outputHeight = height ?? refImages[0].height
         print("Output size: \(outputWidth)x\(outputHeight)")
-        print("Strength: \(strength) (\(Int((1.0 - strength) * 100))% of original preserved)")
 
-        // Calculate actual steps to pass to pipeline
-        // By default, --steps means effective steps (what you get after strength reduction)
-        // With --total-steps flag, it means total steps before strength reduction (legacy)
-        let actualSteps: Int
-        let effectiveSteps: Int
-        if totalSteps {
-            // Legacy behavior: steps is total, effective = steps * strength
-            actualSteps = steps
-            effectiveSteps = Int(ceil(Float(steps) * strength))
-            print("Steps: \(effectiveSteps) effective (from \(steps) total)")
-        } else {
-            // New behavior: steps is effective, calculate total needed
-            // effective = total * strength, so total = effective / strength
-            actualSteps = Int(ceil(Float(steps) / strength))
-            effectiveSteps = steps
-            print("Steps: \(effectiveSteps) effective (total: \(actualSteps))")
-        }
+        // Note: Flux.2 I2I uses conditioning mode, not SD-style noise injection
+        // The reference image provides visual context to the transformer
+        // Strength parameter is accepted for API compatibility but doesn't skip timesteps
+        let actualSteps = steps
+        print("Steps: \(actualSteps)")
 
         if upsamplePrompt {
             print("Prompt upsampling: enabled")

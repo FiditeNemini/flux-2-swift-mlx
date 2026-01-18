@@ -7,7 +7,7 @@ The `flux2` command-line tool provides access to Flux.2 image generation on Mac 
 | Command | Description |
 |---------|-------------|
 | `t2i` | Text-to-Image generation (default) |
-| `i2i` | Image-to-Image generation with multi-reference support |
+| `i2i` | Image-to-Image generation with 1-3 reference images |
 | `download` | Download required models |
 | `info` | Show system and model information |
 
@@ -86,12 +86,29 @@ flux2 t2i "landscape painting" \
 
 ## Image-to-Image (i2i)
 
-Generate images using reference images as guidance. Supports single or multi-reference editing.
+Transform or combine images using a text prompt. Flux.2 supports two modes:
+
+### Two Modes of Operation
+
+**1. Traditional I2I (Single Image + Strength < 1.0)**
+- Encodes the input image, mixes with noise based on strength, then denoises
+- Lower strength = more of the original image preserved
+- Use for: style transfer, subtle modifications, preserving structure
+
+**2. Multi-Image Conditioning (2-3 Images OR Strength = 1.0)**
+- Reference images provide visual context for generation
+- Output starts from random noise, references guide the transformer
+- Full denoising (all steps, no timestep skip)
+- Use for: combining elements from multiple images, inspired generation
 
 ### Usage
 
 ```bash
-flux2 i2i <prompt> --images <image1> [--images <image2>] [--images <image3>] [options]
+# Traditional I2I (single image with strength)
+flux2 i2i <prompt> --images <reference_image> --strength 0.7 [options]
+
+# Multi-image conditioning
+flux2 i2i <prompt> --images <img1> --images <img2> [--images <img3>] [options]
 ```
 
 ### Arguments
@@ -104,7 +121,7 @@ flux2 i2i <prompt> --images <image1> [--images <image2>] [--images <image3>] [op
 
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
-| `--images` | `-i` | required | Reference image(s), 1-3 images |
+| `--images` | `-i` | required | Reference image to transform |
 | `--output` | `-o` | `output.png` | Output file path |
 | `--width` | `-w` | from image | Output width (default: first reference image) |
 | `--height` | `-h` | from image | Output height (default: first reference image) |
@@ -148,7 +165,7 @@ flux2 i2i "prompt" --steps 28 --strength 0.7 --total-steps
 
 ### Examples
 
-**Single reference - style transfer:**
+**Style transfer:**
 ```bash
 flux2 i2i "transform into a watercolor painting" \
   --images photo.jpg \
@@ -157,25 +174,13 @@ flux2 i2i "transform into a watercolor painting" \
   --output watercolor.png
 ```
 
-**Multi-reference - combine elements:**
-```bash
-flux2 i2i "make the cat wearing the jacket" \
-  --images cat.png \
-  --images jacket.jpg \
-  --strength 0.7 \
-  --steps 28 \
-  --width 1024 --height 1024 \
-  --output cat_with_jacket.png
-```
-
 **With prompt upsampling:**
 ```bash
-flux2 i2i "place the subject in this scene" \
-  --images subject.png \
-  --images background.png \
+flux2 i2i "make it look like a cyberpunk scene" \
+  --images original.jpg \
   --strength 0.6 \
   --upsample-prompt \
-  --output composite.png
+  --output cyberpunk.png
 ```
 
 **Save progress checkpoints:**
@@ -189,6 +194,36 @@ flux2 i2i "artistic interpretation" \
   --output artistic.png
 # Saves: artistic_checkpoints/step_005.png, step_010.png, etc.
 ```
+
+**Preserve more of original (lower strength):**
+```bash
+flux2 i2i "add subtle vintage film grain effect" \
+  --images photo.jpg \
+  --strength 0.3 \
+  --steps 28 \
+  --output vintage.png
+```
+
+**Multi-image conditioning (combine elements):**
+```bash
+flux2 i2i "a cat wearing the jacket" \
+  --images cat.jpg \
+  --images jacket.jpg \
+  --steps 28 \
+  --output cat_with_jacket.png
+```
+
+**Multi-image conditioning (inspired by references):**
+```bash
+flux2 i2i "create a scene combining these elements" \
+  --images landscape.jpg \
+  --images character.jpg \
+  --images style_reference.jpg \
+  --steps 28 \
+  --output combined.png
+```
+
+> **Note:** Multi-image mode ignores the `--strength` parameter and always performs full denoising. Reference images provide visual context that guides the transformer's attention during generation.
 
 ---
 
