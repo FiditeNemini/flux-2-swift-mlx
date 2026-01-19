@@ -170,6 +170,71 @@ flux2 i2i "transform into a beautiful watercolor painting with soft brushstrokes
 
 ---
 
+### I2I - Multi-Image: Cat + Jacket (2 images)
+
+**Prompt:** `"Put the jacket from image 2 on the cat from image 1"`
+
+**Reference Images:**
+1. Cat on beach (1024x1024)
+2. Yellow jacket (1080x1620)
+
+**Parameters:**
+- Size: 1024x1024
+- Steps: 28
+- Strength: 1.0 (full conditioning mode)
+- Guidance: 4.0
+
+| Step 7 | Step 14 | Step 21 | Final (Step 28) |
+|--------|---------|---------|-----------------|
+| ![Step 7](i2i_cat_jacket/final_checkpoints/step_007.png) | ![Step 14](i2i_cat_jacket/final_checkpoints/step_014.png) | ![Step 21](i2i_cat_jacket/final_checkpoints/step_021.png) | ![Final](i2i_cat_jacket/final.png) |
+
+**Command:**
+```bash
+flux2 i2i "Put the jacket from image 2 on the cat from image 1" \
+  --images cat_beach.png --images jacket.jpg \
+  --width 1024 --height 1024 \
+  --strength 1.0 --steps 28 \
+  --checkpoint 7 --profile \
+  --output cat_jacket.png
+```
+
+> **Note:** With `strength=1.0`, Flux.2 uses full conditioning mode where reference images provide visual context but the output is generated from random noise. The model extracts visual elements (colors, textures, objects) from each reference image and combines them according to the prompt.
+
+---
+
+### I2I - Multi-Image: Cat + Jacket + Hat (3 images)
+
+**Prompt:** `"Put the jacket from image 2 on the cat from image 1 and put the hat from image 3 on the head of the cat"`
+
+**Reference Images:**
+1. Cat on beach (1024x1024)
+2. Yellow jacket (1080x1620)
+3. Rainbow cap (1193x1000)
+
+**Parameters:**
+- Size: 1024x1024
+- Steps: 28
+- Strength: 1.0 (full conditioning mode)
+- Guidance: 4.0
+
+| Step 7 | Step 14 | Step 21 | Final (Step 28) |
+|--------|---------|---------|-----------------|
+| ![Step 7](i2i_cat_jacket_hat/final_checkpoints/step_007.png) | ![Step 14](i2i_cat_jacket_hat/final_checkpoints/step_014.png) | ![Step 21](i2i_cat_jacket_hat/final_checkpoints/step_021.png) | ![Final](i2i_cat_jacket_hat/final.png) |
+
+**Command:**
+```bash
+flux2 i2i "Put the jacket from image 2 on the cat from image 1 and put the hat from image 3 on the head of the cat" \
+  --images cat_beach.png --images jacket.jpg --images hat.jpg \
+  --width 1024 --height 1024 \
+  --strength 1.0 --steps 28 \
+  --checkpoint 7 --profile \
+  --output cat_jacket_hat.png
+```
+
+> **Key insight:** When using multiple reference images, explicitly reference them in the prompt (e.g., "from image 1", "from image 2"). The model correctly identifies and transfers visual elements from each reference image without needing explicit color or style descriptions.
+
+---
+
 ## Hardware
 
 - **Machine:** MacBook Pro 14" (Nov 2023)

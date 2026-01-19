@@ -158,7 +158,8 @@ public class Flux2TextEncoder: @unchecked Sendable {
 
             let description = result.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
             imageDescriptions.append("Image \(imageNumber): \(description)")
-            Flux2Debug.log("Image \(imageNumber) analysis: \(description.prefix(100))...")
+            print("[VLM-Upsample] Image \(imageNumber) description: \(description)")
+            fflush(stdout)
         }
 
         // Build enhanced prompt with image context
@@ -172,7 +173,8 @@ public class Flux2TextEncoder: @unchecked Sendable {
         Generate an image that combines elements from the reference images according to the user's request.
         """
 
-        Flux2Debug.log("Enhanced prompt with image context created")
+        print("[VLM-Upsample] Enhanced prompt with image context:\n\(enhancedPrompt)")
+        fflush(stdout)
 
         // Now use text-only chat to refine the prompt for image generation
         let messages = FluxConfig.buildMessages(prompt: enhancedPrompt, mode: .upsamplingI2I)
@@ -187,7 +189,8 @@ public class Flux2TextEncoder: @unchecked Sendable {
         )
 
         let finalPrompt = chatResult.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-        Flux2Debug.log("Final enhanced prompt: \"\(finalPrompt.prefix(150))...\"")
+        print("[VLM-Upsample] Final enhanced prompt:\n\(finalPrompt)")
+        fflush(stdout)
 
         return finalPrompt
         #else
