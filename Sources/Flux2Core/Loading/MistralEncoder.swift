@@ -4,7 +4,11 @@
 import Foundation
 import MLX
 import MLXNN
-import MistralCore
+import FluxTextEncoders
+import CoreGraphics
+#if os(macOS)
+import AppKit
+#endif
 
 /// Wrapper for MistralCore text encoding for Flux.2
 ///
@@ -16,7 +20,7 @@ public class Flux2TextEncoder: @unchecked Sendable {
     public let quantization: MistralQuantization
 
     /// Whether the model is loaded
-    public var isLoaded: Bool { MistralCore.shared.isModelLoaded }
+    public var isLoaded: Bool { FluxTextEncoders.shared.isModelLoaded }
 
     /// Maximum sequence length for embeddings
     public let maxSequenceLength: Int = 512
@@ -48,9 +52,9 @@ public class Flux2TextEncoder: @unchecked Sendable {
 
         // Load model using MistralCore singleton
         if let path = modelPath {
-            try MistralCore.shared.loadModel(from: path.path)
+            try FluxTextEncoders.shared.loadModel(from: path.path)
         } else {
-            try await MistralCore.shared.loadModel(variant: variant) { progress, message in
+            try await FluxTextEncoders.shared.loadModel(variant: variant) { progress, message in
                 Flux2Debug.log("Download: \(Int(progress * 100))% - \(message)")
             }
         }
@@ -65,7 +69,7 @@ public class Flux2TextEncoder: @unchecked Sendable {
     /// - Parameter prompt: Original user prompt
     /// - Returns: Enhanced prompt with more visual details
     public func upsamplePrompt(_ prompt: String) throws -> String {
-        guard MistralCore.shared.isModelLoaded else {
+        guard FluxTextEncoders.shared.isModelLoaded else {
             throw Flux2Error.modelNotLoaded("Text encoder not loaded")
         }
 
@@ -75,7 +79,7 @@ public class Flux2TextEncoder: @unchecked Sendable {
         let messages = FluxConfig.buildMessages(prompt: prompt, mode: .upsamplingT2I)
 
         // Generate enhanced prompt using Mistral chat
-        let result = try MistralCore.shared.chat(
+        let result = try FluxTextEncoders.shared.chat(
             messages: messages,
             parameters: GenerateParameters(
                 maxTokens: 512,
@@ -90,6 +94,108 @@ public class Flux2TextEncoder: @unchecked Sendable {
         return enhanced
     }
 
+    /// Upsample/enhance a prompt using Mistral VLM's vision capability
+    /// Analyzes each reference image and incorporates descriptions into the prompt
+    /// - Parameters:
+    ///   - prompt: Original user prompt
+    ///   - images: Reference images to analyze
+    /// - Returns: Enhanced prompt with image descriptions
+    @MainActor
+    public func upsamplePromptWithImages(_ prompt: String, images: [CGImage]) async throws -> String {
+        #if os(macOS)
+        guard !images.isEmpty else {
+            // Fall back to text-only upsampling if no images
+            return try upsamplePrompt(prompt)
+        }
+
+        Flux2Debug.log("Upsampling prompt with \(images.count) reference image(s)")
+
+        // Load VLM model if not already loaded
+        if !FluxTextEncoders.shared.isVLMLoaded {
+            Flux2Debug.log("Loading VLM model for image analysis...")
+
+            // Map our quantization to MistralCore's variant
+            let variant: ModelVariant
+            switch quantization {
+            case .bf16:
+                variant = .bf16
+            case .mlx8bit:
+                variant = .mlx8bit
+            case .mlx6bit:
+                variant = .mlx6bit
+            case .mlx4bit:
+                variant = .mlx4bit
+            }
+
+            try await FluxTextEncoders.shared.loadVLMModel(variant: variant) { progress, message in
+                Flux2Debug.log("VLM Download: \(Int(progress * 100))% - \(message)")
+            }
+            Flux2Debug.log("VLM model loaded successfully")
+        }
+
+        // Analyze each image
+        var imageDescriptions: [String] = []
+
+        for (index, cgImage) in images.enumerated() {
+            let imageNumber = index + 1
+            Flux2Debug.log("Analyzing image \(imageNumber)/\(images.count)...")
+
+            // Convert CGImage to NSImage for VLM
+            let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+
+            // Analyze the image with VLM
+            let analysisPrompt = "Describe this image in detail. Focus on the main subject, colors, style, and any notable elements."
+
+            let result = try FluxTextEncoders.shared.analyzeImage(
+                image: nsImage,
+                prompt: analysisPrompt,
+                parameters: GenerateParameters(
+                    maxTokens: 200,
+                    temperature: 0.3,
+                    topP: 0.9
+                )
+            )
+
+            let description = result.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+            imageDescriptions.append("Image \(imageNumber): \(description)")
+            Flux2Debug.log("Image \(imageNumber) analysis: \(description.prefix(100))...")
+        }
+
+        // Build enhanced prompt with image context
+        let imageContext = imageDescriptions.joined(separator: "\n")
+        let enhancedPrompt = """
+        Reference images context:
+        \(imageContext)
+
+        User request: \(prompt)
+
+        Generate an image that combines elements from the reference images according to the user's request.
+        """
+
+        Flux2Debug.log("Enhanced prompt with image context created")
+
+        // Now use text-only chat to refine the prompt for image generation
+        let messages = FluxConfig.buildMessages(prompt: enhancedPrompt, mode: .upsamplingI2I)
+
+        let chatResult = try FluxTextEncoders.shared.chat(
+            messages: messages,
+            parameters: GenerateParameters(
+                maxTokens: 512,
+                temperature: 0.7,
+                topP: 0.9
+            )
+        )
+
+        let finalPrompt = chatResult.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        Flux2Debug.log("Final enhanced prompt: \"\(finalPrompt.prefix(150))...\"")
+
+        return finalPrompt
+        #else
+        // Fall back to text-only upsampling on non-macOS platforms
+        return try upsamplePrompt(prompt)
+        #endif
+    }
+
     // MARK: - Encoding
 
     /// Encode a text prompt to Flux.2 embeddings
@@ -98,7 +204,7 @@ public class Flux2TextEncoder: @unchecked Sendable {
     ///   - upsample: Whether to enhance the prompt before encoding (default: false)
     /// - Returns: Embeddings tensor [1, 512, 15360]
     public func encode(_ prompt: String, upsample: Bool = false) throws -> MLXArray {
-        guard MistralCore.shared.isModelLoaded else {
+        guard FluxTextEncoders.shared.isModelLoaded else {
             throw Flux2Error.modelNotLoaded("Text encoder not loaded")
         }
 
@@ -113,7 +219,7 @@ public class Flux2TextEncoder: @unchecked Sendable {
         Flux2Debug.log("Encoding prompt: \"\(finalPrompt.prefix(50))...\"")
 
         // Use the FLUX-compatible embedding extraction
-        let embeddings = try MistralCore.shared.extractFluxEmbeddings(
+        let embeddings = try FluxTextEncoders.shared.extractFluxEmbeddings(
             prompt: finalPrompt,
             maxLength: maxSequenceLength
         )
@@ -128,7 +234,7 @@ public class Flux2TextEncoder: @unchecked Sendable {
     /// Unload the model to free memory
     @MainActor
     public func unload() {
-        MistralCore.shared.unloadModel()
+        FluxTextEncoders.shared.unloadModel()
 
         // Force GPU memory cleanup
         eval([])
@@ -174,7 +280,7 @@ extension Flux2TextEncoder {
 
     /// Get information about the loaded model
     public var modelInfo: String {
-        guard MistralCore.shared.isModelLoaded else {
+        guard FluxTextEncoders.shared.isModelLoaded else {
             return "Model not loaded"
         }
 

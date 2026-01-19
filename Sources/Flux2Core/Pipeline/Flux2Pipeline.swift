@@ -348,7 +348,16 @@ public class Flux2Pipeline: @unchecked Sendable {
         profiler.end("1. Load Text Encoder")
 
         profiler.start("2. Text Encoding")
-        let textEmbeddings = try textEncoder!.encode(prompt, upsample: upsamplePrompt)
+        // Use vision-based upsampling for I2I if enabled
+        let textEmbeddings: MLXArray
+        if upsamplePrompt, case .imageToImage(let images, _) = mode {
+            // Use VLM to analyze reference images and enhance prompt
+            Flux2Debug.log("Using vision-based prompt upsampling for I2I with \(images.count) image(s)")
+            let enhancedPrompt = try await textEncoder!.upsamplePromptWithImages(prompt, images: images)
+            textEmbeddings = try textEncoder!.encode(enhancedPrompt, upsample: false)
+        } else {
+            textEmbeddings = try textEncoder!.encode(prompt, upsample: upsamplePrompt)
+        }
         eval(textEmbeddings)
         profiler.end("2. Text Encoding")
 
@@ -752,15 +761,42 @@ public class Flux2Pipeline: @unchecked Sendable {
             throw Flux2Error.invalidConfiguration("No reference images provided")
         }
 
+        // Constants from Python Flux.2 pipeline
+        let maxImageArea = 1024 * 1024  // Max 1024² pixels per reference image
+        let multipleOf = 32  // vae_scale_factor * 2
+
         var packedLatentsList: [MLXArray] = []
         var latentHeights: [Int] = []
         var latentWidths: [Int] = []
 
         for (index, image) in images.enumerated() {
-            Flux2Debug.log("Encoding reference image \(index + 1)/\(images.count)...")
+            Flux2Debug.log("Encoding reference image \(index + 1)/\(images.count) (original: \(image.width)x\(image.height))...")
 
-            // Preprocess image to target dimensions
-            let processed = preprocessImageForVAE(image, targetHeight: height, targetWidth: width)
+            // Calculate target dimensions for this image
+            // 1. Resize if exceeds max area (1024² pixels)
+            var targetWidth = image.width
+            var targetHeight = image.height
+            let pixelCount = targetWidth * targetHeight
+
+            if pixelCount > maxImageArea {
+                let scale = sqrt(Double(maxImageArea) / Double(pixelCount))
+                targetWidth = Int(Double(targetWidth) * scale)
+                targetHeight = Int(Double(targetHeight) * scale)
+                Flux2Debug.log("  Resizing to fit max area: \(targetWidth)x\(targetHeight)")
+            }
+
+            // 2. Make dimensions multiples of 32 (vae_scale_factor * 2)
+            targetWidth = (targetWidth / multipleOf) * multipleOf
+            targetHeight = (targetHeight / multipleOf) * multipleOf
+
+            // Ensure minimum size
+            targetWidth = max(targetWidth, multipleOf)
+            targetHeight = max(targetHeight, multipleOf)
+
+            Flux2Debug.log("  Final dimensions: \(targetWidth)x\(targetHeight)")
+
+            // Preprocess image to ITS OWN target dimensions (not output dimensions!)
+            let processed = preprocessImageForVAE(image, targetHeight: targetHeight, targetWidth: targetWidth)
 
             // Encode with VAE -> [1, 32, H/8, W/8]
             let rawLatents = vae.encode(processed)
@@ -783,13 +819,13 @@ public class Flux2Pipeline: @unchecked Sendable {
             let squeezed = packed.squeezed(axis: 0)
             packedLatentsList.append(squeezed)
 
-            // Track dimensions for position ID generation
-            let patchifiedH = height / 16
-            let patchifiedW = width / 16
+            // Track THIS IMAGE's dimensions for position ID generation
+            let patchifiedH = targetHeight / 16
+            let patchifiedW = targetWidth / 16
             latentHeights.append(patchifiedH)
             latentWidths.append(patchifiedW)
 
-            Flux2Debug.log("  Image \(index + 1): patchified shape \(patchified.shape), sequence length \(squeezed.shape[0])")
+            Flux2Debug.log("  Image \(index + 1): patchified \(patchifiedH)x\(patchifiedW), sequence length \(squeezed.shape[0])")
         }
 
         // Concatenate all reference image latents along sequence dimension
