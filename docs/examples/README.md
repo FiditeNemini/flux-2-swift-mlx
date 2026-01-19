@@ -175,14 +175,19 @@ flux2 i2i "transform into a beautiful watercolor painting with soft brushstrokes
 **Prompt:** `"Put the jacket from image 2 on the cat from image 1"`
 
 **Reference Images:**
-1. `cat_beach_upsampled/final.png` (1024x1024) - Cat with sunglasses on beach
-2. `jacket.jpg` (1080x1620) - Yellow jacket
+
+| Image 1: Cat | Image 2: Jacket |
+|--------------|-----------------|
+| ![Cat](cat_beach_upsampled/final.png) | ![Jacket](jacket.jpg) |
+| `cat_beach_upsampled/final.png` (1024x1024) | `jacket.jpg` (1080x1620) |
 
 **Parameters:**
 - Size: 1024x1024
 - Steps: 28
 - Strength: 1.0 (full conditioning mode)
 - Guidance: 4.0
+
+**Progression:**
 
 | Step 7 | Step 14 | Step 21 | Final (Step 28) |
 |--------|---------|---------|-----------------|
@@ -233,15 +238,19 @@ flux2 i2i "Put the jacket from image 2 on the cat from image 1" \
 **Prompt:** `"Put the jacket from image 2 on the cat from image 1 and put the hat from image 3 on the head of the cat"`
 
 **Reference Images:**
-1. `cat_beach_upsampled/final.png` (1024x1024) - Cat with sunglasses on beach
-2. `jacket.jpg` (1080x1620) - Yellow jacket
-3. `hat.jpg` (1193x1000) - Rainbow cap
+
+| Image 1: Cat | Image 2: Jacket | Image 3: Hat |
+|--------------|-----------------|--------------|
+| ![Cat](cat_beach_upsampled/final.png) | ![Jacket](jacket.jpg) | ![Hat](hat.jpg) |
+| `cat_beach_upsampled/final.png` (1024x1024) | `jacket.jpg` (1080x1620) | `hat.jpg` (1193x1000) |
 
 **Parameters:**
 - Size: 1024x1024
 - Steps: 28
 - Strength: 1.0 (full conditioning mode)
 - Guidance: 4.0
+
+**Progression:**
 
 | Step 7 | Step 14 | Step 21 | Final (Step 28) |
 |--------|---------|---------|-----------------|
