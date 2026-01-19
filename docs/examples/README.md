@@ -233,9 +233,9 @@ flux2 i2i "Put the jacket from image 2 on the cat from image 1" \
 **Prompt:** `"Put the jacket from image 2 on the cat from image 1 and put the hat from image 3 on the head of the cat"`
 
 **Reference Images:**
-1. Cat on beach (1024x1024)
-2. Yellow jacket (1080x1620)
-3. Rainbow cap (1193x1000)
+1. `cat_beach_upsampled/final.png` (1024x1024) - Cat with sunglasses on beach
+2. `jacket.jpg` (1080x1620) - Yellow jacket
+3. `hat.jpg` (1193x1000) - Rainbow cap
 
 **Parameters:**
 - Size: 1024x1024
