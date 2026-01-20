@@ -781,14 +781,15 @@ public class Flux2Pipeline: @unchecked Sendable {
 
     /// Encode reference images for image-to-image generation (Flux.2 conditioning mode)
     ///
-    /// OPTIMIZED: Following the reference Flux.2 diffusers implementation:
-    /// 1. Multiple images are concatenated VISUALLY (side by side) into a single image
-    /// 2. The concatenated image is resized to max 768² pixels (not 1024²)
-    /// 3. Single VAE encoding produces bounded token count (~2300 max)
+    /// Following the reference Flux.2 diffusers implementation:
+    /// 1. Each image is encoded SEPARATELY through VAE
+    /// 2. Each image gets a UNIQUE T-coordinate (T=10, T=20, T=30, etc.)
+    /// 3. Latents are concatenated AFTER encoding
     ///
-    /// This dramatically reduces attention cost:
-    /// - Old: 3 images × 4096 tokens = 12,288 reference tokens
-    /// - New: 1 concatenated image = ~2300 tokens max
+    /// This preserves semantic information:
+    /// - The transformer can distinguish between different reference images
+    /// - Each reference image has its own position in the "time" dimension
+    /// - Images are resized to max 512² pixels each for memory efficiency
     ///
     /// - Parameters:
     ///   - images: Reference images (1-10 supported)
@@ -808,75 +809,97 @@ public class Flux2Pipeline: @unchecked Sendable {
             throw Flux2Error.invalidConfiguration("No reference images provided")
         }
 
-        // === STEP 1: Concatenate images horizontally (like diffusers) ===
-        guard let concatenatedImage = concatenateImagesHorizontally(images) else {
-            throw Flux2Error.generationFailed("Failed to concatenate reference images")
-        }
+        Flux2Debug.log("Encoding \(images.count) reference images separately with unique T-coordinates...")
 
-        Flux2Debug.log("Reference images concatenated: \(images.count) images -> \(concatenatedImage.width)x\(concatenatedImage.height)")
-
-        // === STEP 2: Resize if exceeds max area (768² like diffusers, not 1024²) ===
-        let maxImageArea = 768 * 768  // Matches UPSAMPLING_MAX_IMAGE_SIZE in diffusers
+        // === STEP 1: Process each image separately ===
+        // Max area per image - matches diffusers pipeline_flux2.py line 892-893
+        // Reference uses 1024² for conditioning images (not 768² which is for upsampling)
+        let maxImageArea = 1024 * 1024  // ~4096 tokens per image
         let multipleOf = 32  // vae_scale_factor * 2
 
-        var targetWidth = concatenatedImage.width
-        var targetHeight = concatenatedImage.height
-        let pixelCount = targetWidth * targetHeight
+        var allPackedLatents: [MLXArray] = []
+        var latentHeights: [Int] = []
+        var latentWidths: [Int] = []
 
-        if pixelCount > maxImageArea {
-            let scale = sqrt(Double(maxImageArea) / Double(pixelCount))
-            targetWidth = Int(Double(targetWidth) * scale)
-            targetHeight = Int(Double(targetHeight) * scale)
-            Flux2Debug.log("Resizing concatenated image to fit 768² max: \(targetWidth)x\(targetHeight)")
+        for (index, image) in images.enumerated() {
+            Flux2Debug.log("Processing reference image \(index + 1)/\(images.count): \(image.width)x\(image.height)")
+
+            // Calculate target dimensions for this image
+            var targetWidth = image.width
+            var targetHeight = image.height
+            let pixelCount = targetWidth * targetHeight
+
+            if pixelCount > maxImageArea {
+                let scale = sqrt(Double(maxImageArea) / Double(pixelCount))
+                targetWidth = Int(Double(targetWidth) * scale)
+                targetHeight = Int(Double(targetHeight) * scale)
+            }
+
+            // Make dimensions multiples of 32
+            targetWidth = (targetWidth / multipleOf) * multipleOf
+            targetHeight = (targetHeight / multipleOf) * multipleOf
+
+            // Ensure minimum size
+            targetWidth = max(targetWidth, multipleOf)
+            targetHeight = max(targetHeight, multipleOf)
+
+            Flux2Debug.log("  -> Resized to \(targetWidth)x\(targetHeight)")
+
+            // Preprocess and encode
+            let processed = preprocessImageForVAE(image, targetHeight: targetHeight, targetWidth: targetWidth)
+
+            // Encode with VAE -> [1, 32, H/8, W/8]
+            let rawLatents = vae.encode(processed)
+
+            // Patchify: [1, 32, H/8, W/8] -> [1, 128, H/16, W/16]
+            var patchified = LatentUtils.packLatentsToPatchified(rawLatents)
+
+            // Normalize with BatchNorm (critical for Flux.2)
+            patchified = LatentUtils.normalizeLatentsWithBatchNorm(
+                patchified,
+                runningMean: vae.batchNormRunningMean,
+                runningVar: vae.batchNormRunningVar
+            )
+            eval(patchified)
+
+            // Pack to sequence: [1, 128, H/16, W/16] -> [1, seq_len, 128]
+            let packedLatents = LatentUtils.packPatchifiedToSequence(patchified)
+
+            // Remove batch dimension for concatenation: [1, seq_len, 128] -> [seq_len, 128]
+            let squeezed = packedLatents.squeezed(axis: 0)
+            allPackedLatents.append(squeezed)
+
+            // Track dimensions for position IDs
+            let patchifiedH = targetHeight / 16
+            let patchifiedW = targetWidth / 16
+            latentHeights.append(patchifiedH)
+            latentWidths.append(patchifiedW)
+
+            let seqLen = squeezed.shape[0]
+            Flux2Debug.log("  -> Encoded to \(seqLen) tokens (T-coordinate will be \(10 + 10 * index))")
         }
 
-        // Make dimensions multiples of 32
-        targetWidth = (targetWidth / multipleOf) * multipleOf
-        targetHeight = (targetHeight / multipleOf) * multipleOf
+        // === STEP 2: Concatenate all latents ===
+        // Stack along sequence dimension: [seq1, 128] + [seq2, 128] + ... -> [total_seq, 128]
+        let concatenatedLatents = concatenated(allPackedLatents, axis: 0)
 
-        // Ensure minimum size
-        targetWidth = max(targetWidth, multipleOf)
-        targetHeight = max(targetHeight, multipleOf)
+        // Add batch dimension back: [total_seq, 128] -> [1, total_seq, 128]
+        let finalLatents = concatenatedLatents.expandedDimensions(axis: 0)
 
-        Flux2Debug.log("Final reference dimensions: \(targetWidth)x\(targetHeight)")
+        let totalSeqLen = finalLatents.shape[1]
+        Flux2Debug.log("Combined reference latents: \(finalLatents.shape) (total \(totalSeqLen) tokens)")
 
-        // === STEP 3: Single VAE encoding ===
-        let processed = preprocessImageForVAE(concatenatedImage, targetHeight: targetHeight, targetWidth: targetWidth)
-
-        // Encode with VAE -> [1, 32, H/8, W/8]
-        let rawLatents = vae.encode(processed)
-
-        // Patchify: [1, 32, H/8, W/8] -> [1, 128, H/16, W/16]
-        var patchified = LatentUtils.packLatentsToPatchified(rawLatents)
-
-        // Normalize with BatchNorm (critical for Flux.2)
-        patchified = LatentUtils.normalizeLatentsWithBatchNorm(
-            patchified,
-            runningMean: vae.batchNormRunningMean,
-            runningVar: vae.batchNormRunningVar
-        )
-        eval(patchified)
-
-        // Pack to sequence: [1, 128, H/16, W/16] -> [1, seq_len, 128]
-        let packedLatents = LatentUtils.packPatchifiedToSequence(patchified)
-
-        let seqLen = packedLatents.shape[1]
-        Flux2Debug.log("Reference latents: \(packedLatents.shape) (sequence length: \(seqLen))")
-
-        // === STEP 4: Generate position IDs for single concatenated image ===
-        let patchifiedH = targetHeight / 16
-        let patchifiedW = targetWidth / 16
-
-        // Use standard position IDs for a single image with T=1 (reference image marker)
+        // === STEP 3: Generate position IDs with unique T-coordinates per image ===
         let positionIds = LatentUtils.generateReferenceImagePositionIDs(
-            latentHeights: [patchifiedH],
-            latentWidths: [patchifiedW],
+            latentHeights: latentHeights,
+            latentWidths: latentWidths,
             scale: 10
         )
 
-        Flux2Debug.log("Reference encoding complete: \(images.count) images -> \(seqLen) tokens (was \(images.count * 4096) with old method)")
+        Flux2Debug.log("Position IDs generated: \(positionIds.shape)")
+        Flux2Debug.log("Reference encoding complete: \(images.count) images with unique T-coordinates")
 
-        return (latents: packedLatents, positionIds: positionIds)
+        return (latents: finalLatents, positionIds: positionIds)
     }
 
     /// Preprocess image for VAE encoding
