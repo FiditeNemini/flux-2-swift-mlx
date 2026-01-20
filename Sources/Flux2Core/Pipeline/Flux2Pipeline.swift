@@ -729,56 +729,6 @@ public class Flux2Pipeline: @unchecked Sendable {
 
     // MARK: - Private Methods
 
-    /// Concatenate multiple CGImages horizontally with center alignment
-    /// Following the reference Flux.2 implementation from diffusers
-    /// - Parameter images: Array of CGImages to concatenate
-    /// - Returns: Single CGImage with all inputs side by side
-    private func concatenateImagesHorizontally(_ images: [CGImage]) -> CGImage? {
-        guard !images.isEmpty else { return nil }
-
-        // Single image - return as is
-        if images.count == 1 {
-            return images[0]
-        }
-
-        // Calculate dimensions for horizontal concatenation
-        let totalWidth = images.reduce(0) { $0 + $1.width }
-        let maxHeight = images.map { $0.height }.max() ?? 0
-
-        Flux2Debug.log("Concatenating \(images.count) images: total \(totalWidth)x\(maxHeight)")
-
-        // Create context with white background
-        let bytesPerPixel = 4
-        let bytesPerRow = bytesPerPixel * totalWidth
-        var pixelData = [UInt8](repeating: 255, count: maxHeight * bytesPerRow)  // White background
-
-        guard let context = CGContext(
-            data: &pixelData,
-            width: totalWidth,
-            height: maxHeight,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            Flux2Debug.log("Failed to create concatenation context")
-            return nil
-        }
-
-        // High quality interpolation
-        context.interpolationQuality = .high
-
-        // Paste images with center vertical alignment
-        var xOffset = 0
-        for image in images {
-            let yOffset = (maxHeight - image.height) / 2
-            context.draw(image, in: CGRect(x: xOffset, y: yOffset, width: image.width, height: image.height))
-            xOffset += image.width
-        }
-
-        return context.makeImage()
-    }
-
     /// Encode reference images for image-to-image generation (Flux.2 conditioning mode)
     ///
     /// Following the reference Flux.2 diffusers implementation:
