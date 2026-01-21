@@ -10,10 +10,12 @@ let package = Package(
         .executable(name: "Flux2App", targets: ["Flux2App"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.0"),
+        // Pin to 0.29.1 - VLM generation breaks with 0.30.x
+        .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.29.1"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.2.0"),
         .package(url: "https://github.com/huggingface/swift-transformers", from: "0.1.14"),
         // Flux2 Text Encoders (MistralCore + FluxTextEncoders) depuis GitHub
+        // Use branch main for latest changes
         .package(url: "https://github.com/VincentGourbin/flux2-text-encoders-swift-mlx", branch: "main"),
     ],
     targets: [

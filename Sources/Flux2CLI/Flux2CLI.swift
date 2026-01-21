@@ -18,6 +18,7 @@ struct Flux2CLI: AsyncParsableCommand {
             ImageToImage.self,
             Download.self,
             Info.self,
+            VLMTest.self,
         ],
         defaultSubcommand: TextToImage.self
     )
@@ -67,6 +68,9 @@ struct TextToImage: AsyncParsableCommand {
     @Flag(name: .long, help: "Enhance prompt with more visual details before encoding")
     var upsamplePrompt: Bool = false
 
+    @Option(name: .long, help: "Image to analyze with VLM and inject description into prompt (semantic interpretation)")
+    var interpret: [String] = []
+
     @Option(name: .long, help: "Save intermediate images at each N steps (e.g., 5 saves every 5 steps)")
     var checkpoint: Int?
 
@@ -104,8 +108,23 @@ struct TextToImage: AsyncParsableCommand {
             print()
         }
 
+        // Validate interpret image paths exist
+        var interpretImagePaths: [String] = []
+        for path in interpret {
+            guard FileManager.default.fileExists(atPath: path) else {
+                throw ValidationError("Interpret image not found: \(path)")
+            }
+            interpretImagePaths.append(path)
+        }
+
         print("Generating image...")
         print("  Prompt: \"\(prompt)\"")
+        if !interpretImagePaths.isEmpty {
+            print("  Interpret images: \(interpretImagePaths.count) (VLM will analyze and enrich prompt)")
+            for path in interpretImagePaths {
+                print("    - \(path)")
+            }
+        }
         if upsamplePrompt {
             print("  Prompt upsampling: enabled (will enhance prompt with visual details)")
         }
@@ -159,6 +178,7 @@ struct TextToImage: AsyncParsableCommand {
 
         let image = try await pipeline.generateTextToImage(
             prompt: prompt,
+            interpretImagePaths: interpretImagePaths.isEmpty ? nil : interpretImagePaths,
             height: height,
             width: width,
             steps: steps,
@@ -204,8 +224,11 @@ struct ImageToImage: AsyncParsableCommand {
     @Argument(help: "Text prompt describing the desired output")
     var prompt: String
 
-    @Option(name: .shortAndLong, help: "Reference image to transform")
+    @Option(name: .shortAndLong, help: "Reference image for visual conditioning")
     var images: [String]
+
+    @Option(name: .long, help: "Image to analyze with VLM and inject description into prompt (not used as visual reference)")
+    var interpret: [String] = []
 
     @Option(name: .shortAndLong, help: "Output file path")
     var output: String = "output.png"
@@ -268,7 +291,7 @@ struct ImageToImage: AsyncParsableCommand {
             Flux2Profiler.shared.enable()
         }
 
-        // Load reference images
+        // Load reference images (visual conditioning)
         var refImages: [CGImage] = []
         for path in images {
             guard let image = loadImage(from: path) else {
@@ -276,6 +299,16 @@ struct ImageToImage: AsyncParsableCommand {
             }
             refImages.append(image)
             print("Loaded reference image: \(path) (\(image.width)x\(image.height))")
+        }
+
+        // Validate interpret image paths exist (VLM will load them directly)
+        var interpretImagePaths: [String] = []
+        for path in interpret {
+            guard FileManager.default.fileExists(atPath: path) else {
+                throw ValidationError("Interpret image not found: \(path)")
+            }
+            interpretImagePaths.append(path)
+            print("Will interpret image: \(path) [VLM analysis]")
         }
 
         print("Mode: Image-to-Image (Flux.2 conditioning)")
@@ -331,6 +364,7 @@ struct ImageToImage: AsyncParsableCommand {
         let image = try await pipeline.generateImageToImage(
             prompt: prompt,
             images: refImages,
+            interpretImagePaths: interpretImagePaths.isEmpty ? nil : interpretImagePaths,
             height: height,
             width: width,
             steps: actualSteps,

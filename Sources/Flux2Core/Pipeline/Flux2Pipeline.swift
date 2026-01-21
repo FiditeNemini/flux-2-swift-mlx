@@ -221,6 +221,7 @@ public class Flux2Pipeline: @unchecked Sendable {
     /// - Returns: Generated image
     public func generateTextToImage(
         prompt: String,
+        interpretImagePaths: [String]? = nil,
         height: Int = 1024,
         width: Int = 1024,
         steps: Int = 50,
@@ -234,6 +235,7 @@ public class Flux2Pipeline: @unchecked Sendable {
         try await generate(
             mode: .textToImage,
             prompt: prompt,
+            interpretImagePaths: interpretImagePaths,
             height: height,
             width: width,
             steps: steps,
@@ -251,6 +253,7 @@ public class Flux2Pipeline: @unchecked Sendable {
     ///   - prompt: Text description
     ///   - images: 1-3 reference images. Multiple images are concatenated along sequence dimension
     ///             with unique time-based position IDs, allowing the transformer to attend to all references.
+    ///   - interpretImagePaths: File paths to images to analyze with VLM and inject description into prompt (not used as visual reference)
     ///   - height: Optional height (inferred from first image if nil)
     ///   - width: Optional width (inferred from first image if nil)
     ///   - steps: Number of denoising steps
@@ -265,6 +268,7 @@ public class Flux2Pipeline: @unchecked Sendable {
     public func generateImageToImage(
         prompt: String,
         images: [CGImage],
+        interpretImagePaths: [String]? = nil,
         height: Int? = nil,
         width: Int? = nil,
         steps: Int = 50,
@@ -291,6 +295,7 @@ public class Flux2Pipeline: @unchecked Sendable {
         return try await generate(
             mode: .imageToImage(images: images, strength: strength),
             prompt: prompt,
+            interpretImagePaths: interpretImagePaths,
             height: targetHeight,
             width: targetWidth,
             steps: steps,
@@ -307,6 +312,7 @@ public class Flux2Pipeline: @unchecked Sendable {
     public func generate(
         mode: Flux2GenerationMode,
         prompt: String,
+        interpretImagePaths: [String]? = nil,
         height: Int,
         width: Int,
         steps: Int,
@@ -347,16 +353,45 @@ public class Flux2Pipeline: @unchecked Sendable {
         try await loadTextEncoder()
         profiler.end("1. Load Text Encoder")
 
+        // === INTERPRET IMAGES: VLM semantic analysis ===
+        // If interpretImagePaths are provided, describe them with VLM and inject into prompt
+        var enrichedPrompt = prompt
+        if let interpretPaths = interpretImagePaths, !interpretPaths.isEmpty {
+            Flux2Debug.log("Interpreting \(interpretPaths.count) image(s) with VLM for prompt injection...")
+            profiler.start("1b. VLM Interpretation")
+
+            let descriptions = try await textEncoder!.describeImagePathsForPrompt(interpretPaths, context: prompt)
+            
+            if !descriptions.isEmpty {
+                // Build enriched prompt with image descriptions
+                let imageContext = descriptions.enumerated().map { (idx, desc) in
+                    "Interpret image \(idx + 1): \(desc)"
+                }.joined(separator: "\n")
+                
+                enrichedPrompt = """
+                \(imageContext)
+                
+                User request: \(prompt)
+                """
+                
+                Flux2Debug.log("Prompt enriched with \(descriptions.count) VLM description(s)")
+                print("[VLM-Interpret] Enriched prompt:\n\(enrichedPrompt)")
+                fflush(stdout)
+            }
+            
+            profiler.end("1b. VLM Interpretation")
+        }
+
         profiler.start("2. Text Encoding")
         // Use vision-based upsampling for I2I if enabled
         let textEmbeddings: MLXArray
         if upsamplePrompt, case .imageToImage(let images, _) = mode {
             // Use VLM to analyze reference images and enhance prompt
             Flux2Debug.log("Using vision-based prompt upsampling for I2I with \(images.count) image(s)")
-            let enhancedPrompt = try await textEncoder!.upsamplePromptWithImages(prompt, images: images)
+            let enhancedPrompt = try await textEncoder!.upsamplePromptWithImages(enrichedPrompt, images: images)
             textEmbeddings = try textEncoder!.encode(enhancedPrompt, upsample: false)
         } else {
-            textEmbeddings = try textEncoder!.encode(prompt, upsample: upsamplePrompt)
+            textEmbeddings = try textEncoder!.encode(enrichedPrompt, upsample: upsamplePrompt)
         }
         eval(textEmbeddings)
         profiler.end("2. Text Encoding")

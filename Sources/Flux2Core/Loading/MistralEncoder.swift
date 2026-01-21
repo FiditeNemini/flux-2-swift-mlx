@@ -78,14 +78,11 @@ public class Flux2TextEncoder: @unchecked Sendable {
         // Build messages with FLUX T2I upsampling system message
         let messages = FluxConfig.buildMessages(prompt: prompt, mode: .upsamplingT2I)
 
-        // Generate enhanced prompt using Mistral chat
+        // Generate enhanced prompt using Mistral chat (stream: false for correct UTF-8)
         let result = try FluxTextEncoders.shared.chat(
             messages: messages,
-            parameters: GenerateParameters(
-                maxTokens: 512,
-                temperature: 0.7,
-                topP: 0.9
-            )
+            parameters: .balanced,
+            stream: false
         )
 
         let enhanced = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -183,11 +180,8 @@ public class Flux2TextEncoder: @unchecked Sendable {
 
         let chatResult = try FluxTextEncoders.shared.chat(
             messages: messages,
-            parameters: GenerateParameters(
-                maxTokens: 512,
-                temperature: 0.7,
-                topP: 0.9
-            )
+            parameters: .balanced,
+            stream: false
         )
 
         let finalPrompt = chatResult.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
@@ -198,6 +192,201 @@ public class Flux2TextEncoder: @unchecked Sendable {
         #else
         // Fall back to text-only upsampling on non-macOS platforms
         return try upsamplePrompt(prompt)
+        #endif
+    }
+
+    /// Describe images semantically using VLM for prompt injection (using file paths)
+    /// Unlike visual conditioning, this extracts semantic meaning from images
+    /// (e.g., "a map showing the Eiffel Tower location" instead of using the image visually)
+    /// - Parameters:
+    ///   - paths: File paths to images to analyze and describe
+    ///   - context: Optional context to guide the description
+    /// - Returns: Array of image descriptions
+    @MainActor
+    public func describeImagePathsForPrompt(_ paths: [String], context: String? = nil) async throws -> [String] {
+        #if os(macOS)
+        guard !paths.isEmpty else {
+            return []
+        }
+
+        print("[VLM-DEBUG] Starting VLM interpretation for \(paths.count) image(s)")
+        print("[VLM-DEBUG] isModelLoaded=\(FluxTextEncoders.shared.isModelLoaded), isVLMLoaded=\(FluxTextEncoders.shared.isVLMLoaded)")
+        fflush(stdout)
+
+        // CRITICAL: Unload any existing text model before loading VLM
+        // The text model (MistralForCausalLM) and VLM (MistralVLM) use different architectures
+        // Loading VLM on top of text model can cause state corruption
+        if FluxTextEncoders.shared.isModelLoaded && !FluxTextEncoders.shared.isVLMLoaded {
+            print("[VLM-DEBUG] Unloading text model before VLM load...")
+            fflush(stdout)
+            FluxTextEncoders.shared.unloadModel()
+            // Extra GPU memory clearing and synchronization
+            MLX.GPU.clearCache()
+            eval([])  // Force GPU synchronization
+            print("[VLM-DEBUG] GPU cache cleared and synchronized")
+            fflush(stdout)
+        }
+
+        // Load VLM if not already loaded
+        if !FluxTextEncoders.shared.isVLMLoaded {
+            print("[VLM-DEBUG] Loading VLM model (8bit)...")
+            fflush(stdout)
+
+            try await FluxTextEncoders.shared.loadVLMModel(variant: .mlx8bit) { progress, message in
+                print("[VLM-DEBUG] VLM Download: \(Int(progress * 100))% - \(message)")
+                fflush(stdout)
+            }
+
+            print("[VLM-DEBUG] VLM loaded!")
+            fflush(stdout)
+        }
+
+        var descriptions: [String] = []
+
+        // Parameters for VLM generation
+        let params = GenerateParameters(
+            maxTokens: 2048,
+            temperature: 0.7,
+            topP: 0.95,
+            repetitionPenalty: 1.1,
+            repetitionContextSize: 20
+        )
+
+        // STEP 1: I2I Upsampling - VLM analyzes each image
+        for (index, path) in paths.enumerated() {
+            let imageNumber = index + 1
+            Flux2Debug.log("Interpreting image \(imageNumber)/\(paths.count): \(path)")
+
+            // I2I upsampling: VLM analyzes the image with the user's context
+            let i2iResult = try FluxTextEncoders.shared.analyzeImage(
+                path: path,
+                prompt: context ?? "",
+                systemPrompt: FluxConfig.systemMessage(for: .upsamplingI2I),
+                parameters: params
+            ) { token in
+                return true
+            }
+
+            let i2iDescription = i2iResult.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+            print("[Step 1 - I2I] Image \(imageNumber) interpretation: \(i2iDescription)")
+            fflush(stdout)
+
+            descriptions.append(i2iDescription)
+        }
+
+        // STEP 2: T2I Upsampling - Enrich the combined prompt for generation
+        // Combine all image interpretations with the user's request
+        let combinedContext: String
+        if descriptions.count == 1 {
+            combinedContext = """
+            Based on the image analysis: \(descriptions[0])
+
+            User request: \(context ?? "Generate an image")
+            """
+        } else {
+            let imageContexts = descriptions.enumerated().map { "Image \($0.offset + 1): \($0.element)" }.joined(separator: "\n")
+            combinedContext = """
+            Based on the image analyses:
+            \(imageContexts)
+
+            User request: \(context ?? "Generate an image")
+            """
+        }
+
+        print("[Step 2 - T2I] Enriching prompt for generation...")
+        fflush(stdout)
+
+        // T2I upsampling: Transform the interpretation into a rich generation prompt
+        let t2iMessages = FluxConfig.buildMessages(prompt: combinedContext, mode: .upsamplingT2I)
+        let t2iResult = try FluxTextEncoders.shared.chat(
+            messages: t2iMessages,
+            parameters: GenerateParameters(
+                maxTokens: 512,
+                temperature: 0.15,  // Lower temperature for T2I as per BFL reference
+                topP: 0.95,
+                repetitionPenalty: 1.1
+            ),
+            stream: false
+        )
+
+        let finalPrompt = t2iResult.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        print("[Step 2 - T2I] Final generation prompt: \(finalPrompt)")
+        fflush(stdout)
+
+        // Return the single enriched prompt (not per-image descriptions)
+        return [finalPrompt]
+        #else
+        Flux2Debug.log("VLM interpretation not available on this platform")
+        return []
+        #endif
+    }
+
+    /// Describe images semantically using VLM for prompt injection (CGImage version - deprecated)
+    /// Unlike visual conditioning, this extracts semantic meaning from images
+    /// (e.g., "a map showing the Eiffel Tower location" instead of using the image visually)
+    /// - Parameters:
+    ///   - images: Images to analyze and describe
+    ///   - context: Optional context to guide the description
+    /// - Returns: Array of image descriptions
+    @available(*, deprecated, message: "Use describeImagePathsForPrompt instead for better image loading")
+    @MainActor
+    public func describeImagesForPrompt(_ images: [CGImage], context: String? = nil) async throws -> [String] {
+        #if os(macOS)
+        guard !images.isEmpty else {
+            return []
+        }
+
+        Flux2Debug.log("Describing \(images.count) image(s) with VLM for prompt injection")
+
+        // Load VLM model if not already loaded
+        if !FluxTextEncoders.shared.isVLMLoaded {
+            Flux2Debug.log("Loading VLM model for image interpretation...")
+
+            let variant: ModelVariant
+            switch quantization {
+            case .bf16:
+                variant = .bf16
+            case .mlx8bit:
+                variant = .mlx8bit
+            case .mlx6bit:
+                variant = .mlx6bit
+            case .mlx4bit:
+                variant = .mlx4bit
+            }
+
+            try await FluxTextEncoders.shared.loadVLMModel(variant: variant) { progress, message in
+                Flux2Debug.log("VLM Download: \(Int(progress * 100))% - \(message)")
+            }
+            Flux2Debug.log("VLM model loaded successfully")
+        }
+
+        var descriptions: [String] = []
+
+        for (index, cgImage) in images.enumerated() {
+            let imageNumber = index + 1
+            Flux2Debug.log("Interpreting image \(imageNumber)/\(images.count)...")
+
+            // Convert CGImage to NSImage for VLM
+            let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+
+            // Use I2I upsampling API as per Flux.2 reference
+            let result = try FluxTextEncoders.shared.analyzeImage(
+                image: nsImage,
+                prompt: context ?? "",
+                systemPrompt: FluxConfig.systemMessage(for: .upsamplingI2I),
+                parameters: .balanced
+            )
+
+            let description = result.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+            descriptions.append(description)
+            print("[VLM-Interpret] Image \(imageNumber) description: \(description)")
+            fflush(stdout)
+        }
+
+        return descriptions
+        #else
+        Flux2Debug.log("VLM interpretation not available on this platform")
+        return []
         #endif
     }
 

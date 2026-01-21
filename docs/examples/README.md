@@ -116,29 +116,6 @@ The prompt upsampling feature uses Mistral to enhance the original prompt with m
 
 ---
 
-## CLI Commands Used
-
-```bash
-# Standard generation
-.build/release/Flux2CLI t2i "a cat wearing sunglasses, sitting on a sunny beach" \
-  --width 1024 --height 1024 \
-  --steps 28 --guidance 4.0 \
-  --checkpoint 7 \
-  --profile \
-  --output cat_beach.png
-
-# With prompt upsampling
-.build/release/Flux2CLI t2i "a cat wearing sunglasses, sitting on a sunny beach" \
-  --width 1024 --height 1024 \
-  --steps 28 --guidance 4.0 \
-  --upsample-prompt \
-  --checkpoint 7 \
-  --profile \
-  --output cat_beach_upsampled.png
-```
-
----
-
 ## Image-to-Image Examples
 
 ### I2I - Artistic Variation (Watercolor)
@@ -170,133 +147,74 @@ flux2 i2i "transform into a beautiful watercolor painting with soft brushstrokes
 
 ---
 
-### I2I - Multi-Image: Cat + Jacket (2 images)
+### Image Interpretation: Map to Paris Photo (I2I + T2I Upsampling Chain)
 
-**Prompt:** `"Put the jacket from image 2 on the cat from image 1"`
+This example demonstrates the **`--interpret`** feature which chains I2I and T2I upsampling:
 
-**Reference Images:**
+1. **I2I Upsampling**: VLM analyzes the image and interprets the user's request
+2. **T2I Upsampling**: The interpretation is enriched into a detailed generation prompt
+3. **Generation**: Flux.2 generates a new image based on the enriched prompt
 
-| Image 1: Cat | Image 2: Jacket |
-|--------------|-----------------|
-| ![Cat](cat_beach_upsampled/final.png) | ![Jacket](jacket.jpg) |
-| `cat_beach_upsampled/final.png` (1024x1024) | `jacket.jpg` (1080x1620) |
+**Prompt:** `"Describe what the red arrow is seeing"`
 
-**Parameters:**
-- Size: 1024x1024
-- Steps: 28
-- Strength: 1.0 (full conditioning mode)
-- Guidance: 4.0
+**Input:** A map of Paris with a red arrow pointing from Tour Eiffel towards Place de la Bastille
 
-**Progression:**
+| Input Map | Generated Photo |
+|-----------|-----------------|
+| ![Input](i2i_map_paris/input_map.png) | ![Output](i2i_map_paris/output.png) |
 
-| Step 7 | Step 14 | Step 21 | Final (Step 28) |
-|--------|---------|---------|-----------------|
-| ![Step 7](i2i_cat_jacket/final_checkpoints/step_007.png) | ![Step 14](i2i_cat_jacket/final_checkpoints/step_014.png) | ![Step 21](i2i_cat_jacket/final_checkpoints/step_021.png) | ![Final](i2i_cat_jacket/final.png) |
+**VLM Interpretation (Step 1 - I2I):**
+> "Highlight the view from the Eiffel Tower towards Place de la Bastille, keeping the red arrow direction unchanged. Enhance visibility of landmarks along this axis including Musée d'Orsay, Palais Garnier, and Place de la Bastille..."
 
-**Performance Report:**
-```
-╔══════════════════════════════════════════════════════════════╗
-║                  FLUX.2 PERFORMANCE REPORT                   ║
-╠══════════════════════════════════════════════════════════════╣
-📊 PHASE TIMINGS:
-────────────────────────────────────────────────────────────────
-  1. Load Text Encoder                4.10s    0.1%
-  2. Text Encoding                    2.39s    0.0%
-  3. Unload Text Encoder            141.3ms    0.0%
-  4. Load Transformer                21.95s    0.4%
-  5. Load VAE                        68.5ms    0.0%
-  6. Denoising Loop                96m 3.2s   99.5% ███████████████████
-  7. VAE Decode                       2.19s    0.0%
-────────────────────────────────────────────────────────────────
-  TOTAL                           96m 34.0s  100.0%
+**Enriched Prompt (Step 2 - T2I):**
+> "The red arrow is directed towards a panoramic view from the Eiffel Tower, capturing a sweeping perspective of Parisian landmarks along its axis. The view should prominently feature the Musée d'Orsay, a grand, U-shaped Beaux-Arts building with a distinctive clock facade, situated along the left bank of the Seine River..."
 
-📈 DENOISING STEP STATISTICS:
-────────────────────────────────────────────────────────────────
-  Steps:              28
-  Average per step:   3m 25.5s
-  Fastest step:       2m 44.5s
-  Slowest step:       4m 33.4s
-╚══════════════════════════════════════════════════════════════╝
-```
+**Generation Progress:**
+
+| Step 7 (25%) | Step 14 (50%) | Step 21 (75%) | Step 28 (100%) |
+|--------------|---------------|---------------|----------------|
+| ![Step 7](i2i_map_paris/output_checkpoints/step_007.png) | ![Step 14](i2i_map_paris/output_checkpoints/step_014.png) | ![Step 21](i2i_map_paris/output_checkpoints/step_021.png) | ![Step 28](i2i_map_paris/output_checkpoints/step_028.png) |
 
 **Command:**
 ```bash
-flux2 i2i "Put the jacket from image 2 on the cat from image 1" \
-  --images cat_beach.png --images jacket.jpg \
+flux2 t2i "Describe what the red arrow is seeing" \
+  --interpret map.png \
   --width 1024 --height 1024 \
-  --strength 1.0 --steps 28 \
-  --checkpoint 7 --profile \
-  --output cat_jacket.png
+  --steps 28 --checkpoint 7 \
+  -o output.png
 ```
 
-> **Note:** With `strength=1.0`, Flux.2 uses full conditioning mode where reference images provide visual context but the output is generated from random noise. The model extracts visual elements (colors, textures, objects) from each reference image and combines them according to the prompt.
+> **Key insight:** The `--interpret` flag enables VLM image understanding. Instead of just describing the map, the model interprets the user's semantic intent ("what the arrow is seeing") and generates a photorealistic image of the Parisian landmarks along the arrow's path.
+
+See [i2i_map_paris/README.md](i2i_map_paris/README.md) for full technical details.
 
 ---
 
-### I2I - Multi-Image: Cat + Jacket + Hat (3 images)
+## CLI Commands Summary
 
-**Prompt:** `"Put the jacket from image 2 on the cat from image 1 and put the hat from image 3 on the head of the cat"`
-
-**Reference Images:**
-
-| Image 1: Cat | Image 2: Jacket | Image 3: Hat |
-|--------------|-----------------|--------------|
-| ![Cat](cat_beach_upsampled/final.png) | ![Jacket](jacket.jpg) | ![Hat](hat.jpg) |
-| `cat_beach_upsampled/final.png` (1024x1024) | `jacket.jpg` (1080x1620) | `hat.jpg` (1193x1000) |
-
-**Parameters:**
-- Size: 1024x1024
-- Steps: 28
-- Strength: 1.0 (full conditioning mode)
-- Guidance: 4.0
-
-**Progression:**
-
-| Step 7 | Step 14 | Step 21 | Final (Step 28) |
-|--------|---------|---------|-----------------|
-| ![Step 7](i2i_cat_jacket_hat/final_checkpoints/step_007.png) | ![Step 14](i2i_cat_jacket_hat/final_checkpoints/step_014.png) | ![Step 21](i2i_cat_jacket_hat/final_checkpoints/step_021.png) | ![Final](i2i_cat_jacket_hat/final.png) |
-
-**Performance Report:**
-```
-╔══════════════════════════════════════════════════════════════╗
-║                  FLUX.2 PERFORMANCE REPORT                   ║
-╠══════════════════════════════════════════════════════════════╣
-📊 PHASE TIMINGS:
-────────────────────────────────────────────────────────────────
-  1. Load Text Encoder                4.08s    0.0%
-  2. Text Encoding                    2.38s    0.0%
-  3. Unload Text Encoder            143.5ms    0.0%
-  4. Load Transformer                26.43s    0.2%
-  5. Load VAE                        72.4ms    0.0%
-  6. Denoising Loop              176m 28.2s   99.7% ███████████████████
-  7. VAE Decode                       1.93s    0.0%
-  8. Post-processing                  1.4ms    0.0%
-────────────────────────────────────────────────────────────────
-  TOTAL                           177m 3.3s  100.0%
-
-📈 DENOISING STEP STATISTICS:
-────────────────────────────────────────────────────────────────
-  Steps:              28
-  Total denoising:    176m 16.2s
-  Average per step:   6m 17.7s
-  Fastest step:       4m 52.1s
-  Slowest step:       7m 54.5s
-╚══════════════════════════════════════════════════════════════╝
-```
-
-> **Note:** With 3 reference images, each denoising step takes significantly longer (~6m 17.7s) compared to 2 images (~3m 25.5s) due to increased context length in the transformer attention.
-
-**Command:**
 ```bash
-flux2 i2i "Put the jacket from image 2 on the cat from image 1 and put the hat from image 3 on the head of the cat" \
-  --images cat_beach.png --images jacket.jpg --images hat.jpg \
-  --width 1024 --height 1024 \
-  --strength 1.0 --steps 28 \
-  --checkpoint 7 --profile \
-  --output cat_jacket_hat.png
-```
+# Standard T2I generation
+flux2 t2i "a cat wearing sunglasses, sitting on a sunny beach" \
+  --width 1024 --height 1024 --steps 28 \
+  --checkpoint 7 -o cat_beach.png
 
-> **Key insight:** When using multiple reference images, explicitly reference them in the prompt (e.g., "from image 1", "from image 2"). The model correctly identifies and transfers visual elements from each reference image without needing explicit color or style descriptions.
+# T2I with prompt upsampling
+flux2 t2i "a cat wearing sunglasses" \
+  --upsample-prompt \
+  --width 1024 --height 1024 --steps 28 \
+  -o cat_upsampled.png
+
+# I2I artistic transformation
+flux2 i2i "transform into watercolor painting" \
+  --images input.png --strength 0.7 \
+  --steps 28 -o watercolor.png
+
+# T2I with image interpretation (VLM)
+flux2 t2i "describe what you see" \
+  --interpret reference.png \
+  --width 1024 --height 1024 --steps 28 \
+  -o interpreted.png
+```
 
 ---
 
