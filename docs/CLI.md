@@ -148,6 +148,30 @@ flux2 t2i "a beaver building a dam" \
 
 > **Recommendation:** For most use cases, the default qint8 quantization provides excellent quality with lower memory usage. Use bf16 when maximum quality is required and memory is not constrained.
 
+### Klein 9B (Quality/Speed Balance)
+
+Klein 9B offers better quality than Klein 4B while remaining much faster than Dev. It uses the same 4-step distillation with guidance=1.0.
+
+**Basic Klein 9B generation:**
+```bash
+flux2 t2i "a beaver building a dam" --model klein-9b
+# Uses: steps=4, guidance=1.0 automatically
+# Time: ~56s at 1024x1024
+```
+
+**Klein 9B is ideal for:**
+- Better quality than Klein 4B without Dev's long generation time
+- Non-commercial projects where quality matters
+- When you have ~32GB+ RAM available
+
+| Model | Time (1024x1024) | Memory | Quality |
+|-------|------------------|--------|---------|
+| Klein 4B | ~26s | ~5-8GB | Good |
+| **Klein 9B** | **~56s** | **~20GB** | **Better** |
+| Dev | ~35min | ~60GB | Best |
+
+> **Note:** Klein 9B only has bf16 available. No quantized (qint8) variant exists yet. The text encoder uses Qwen3-8B (8bit) which provides excellent quality.
+
 ---
 
 ## Image-to-Image (i2i)

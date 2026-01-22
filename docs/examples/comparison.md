@@ -1,18 +1,18 @@
-# Flux.2 Model Comparison: Dev vs Klein 4B
+# Flux.2 Model Comparison: Dev vs Klein 4B vs Klein 9B
 
-A side-by-side comparison of Flux.2 Dev (32B) and Flux.2 Klein 4B models.
+A side-by-side comparison of all Flux.2 model variants.
 
 ## Model Specifications
 
-| Feature | Flux.2 Dev | Flux.2 Klein 4B |
-|---------|------------|-----------------|
-| **Parameters** | 32B | 4B |
-| **Text Encoder** | Mistral Small 3.2 | Qwen3-4B |
-| **Default Steps** | 50 | 4 (distilled) |
-| **Default Guidance** | 4.0 | 1.0 |
-| **VRAM Usage** | ~60GB | ~5-8GB |
-| **License** | Non-commercial | Apache 2.0 |
-| **1024×1024 Time** | ~35 min | ~26s |
+| Feature | Flux.2 Dev | Klein 4B | Klein 9B |
+|---------|------------|----------|----------|
+| **Parameters** | 32B | 4B | 9B |
+| **Text Encoder** | Mistral Small 3.2 | Qwen3-4B | Qwen3-8B |
+| **Default Steps** | 50 | 4 (distilled) | 4 (distilled) |
+| **Default Guidance** | 4.0 | 1.0 | 1.0 |
+| **VRAM Usage** | ~60GB | ~5-8GB | ~20GB |
+| **License** | Non-commercial | Apache 2.0 | Non-commercial |
+| **1024x1024 Time** | ~35 min | ~26s | ~56s |
 
 ---
 
@@ -32,34 +32,45 @@ A side-by-side comparison of Flux.2 Dev (32B) and Flux.2 Klein 4B models.
 - **Iterating quickly** on prompts
 - Generating **many images** in a batch
 
+### Choose Flux.2 Klein 9B when:
+- You want **better quality than Klein 4B** but faster than Dev
+- You have **~20GB+ VRAM** available
+- **Non-commercial** use is acceptable
+- You want a **balance** between speed and quality
+
 ---
 
 ## Performance Comparison
 
-| Metric | Flux.2 Dev | Klein 4B (bf16) | Klein 4B (qint8) |
-|--------|------------|-----------------|------------------|
-| **Total Time (1024²)** | ~35 min | ~26s | ~27s |
+| Metric | Flux.2 Dev | Klein 4B (bf16) | Klein 9B (bf16) |
+|--------|------------|-----------------|-----------------|
+| **Total Time (1024x1024)** | ~35 min | ~26s | ~56s |
 | **Steps** | 28-50 | 4 | 4 |
-| **Per-Step Time** | ~1 min | ~5.5s | ~5.8s |
-| **Memory Usage** | ~60GB | ~5.6GB | ~3.8GB |
-| **Speedup vs Dev** | 1x | **~80x** | **~78x** |
+| **Per-Step Time** | ~1 min | ~5.0s | ~12.1s |
+| **Memory Usage** | ~60GB | ~5.6GB | ~20GB |
+| **Speedup vs Dev** | 1x | **~80x** | **~38x** |
 
 ---
 
 ## Quality Comparison
 
-While Klein 4B is significantly faster, Flux.2 Dev generally produces:
-- More **detailed textures**
-- Better **coherent compositions**
-- More accurate **prompt following** for complex prompts
-- Better handling of **multiple subjects**
+### Flux.2 Dev (32B)
+- Most **detailed textures** and **coherent compositions**
+- Best **prompt following** for complex prompts
 - Superior **fine details** (faces, hands, text)
+- Ideal for **final production** images
 
-Klein 4B excels at:
-- **Quick iterations** and concept exploration
-- **Simple to medium complexity** prompts
-- **Commercial projects** requiring Apache 2.0 license
-- **Memory-constrained** environments
+### Flux.2 Klein 9B (9B)
+- **Better quality** than Klein 4B
+- Good **detail preservation**
+- Reasonable **prompt adherence**
+- Good balance of **speed and quality**
+
+### Flux.2 Klein 4B (4B)
+- **Fastest** generation
+- Good for **simple to medium complexity** prompts
+- Best for **quick iterations** and concept exploration
+- Only option for **commercial use** (Apache 2.0)
 
 ---
 
@@ -80,29 +91,45 @@ Klein 4B excels at:
 | bf16 | ~5.6GB | ~26s | Best |
 | qint8 | ~3.8GB | ~27s | Excellent |
 
+### Flux.2 Klein 9B
+
+| Quantization | Memory | Speed | Quality |
+|--------------|--------|-------|---------|
+| bf16 | ~20GB | ~56s | Best |
+
+> **Note:** Klein 9B only has bf16 available. No quantized variants exist yet.
+
 ---
 
 ## CLI Examples
 
 ### Same Prompt, Different Models
 
-**Prompt:** `"a cat wearing sunglasses, sitting on a sunny beach"`
+**Prompt:** `"a beaver building a dam"`
 
 #### Flux.2 Dev
 ```bash
-flux2 t2i "a cat wearing sunglasses, sitting on a sunny beach" \
+flux2 t2i "a beaver building a dam" \
   --model dev \
   --steps 28 \
-  -o cat_dev.png
+  -o beaver_dev.png
 # Time: ~20-35 min, Memory: ~60GB
 ```
 
 #### Klein 4B
 ```bash
-flux2 t2i "a cat wearing sunglasses, sitting on a sunny beach" \
+flux2 t2i "a beaver building a dam" \
   --model klein-4b \
-  -o cat_klein.png
+  -o beaver_klein4b.png
 # Time: ~26s, Memory: ~5GB
+```
+
+#### Klein 9B
+```bash
+flux2 t2i "a beaver building a dam" \
+  --model klein-9b \
+  -o beaver_klein9b.png
+# Time: ~56s, Memory: ~20GB
 ```
 
 ---
@@ -110,17 +137,18 @@ flux2 t2i "a cat wearing sunglasses, sitting on a sunny beach" \
 ## Recommended Workflows
 
 ### Iterative Development
-1. **Explore** with Klein 4B (fast iterations)
-2. **Refine** prompt based on results
+1. **Explore** with Klein 4B (fastest iterations)
+2. **Refine** with Klein 9B (better quality check)
 3. **Final render** with Dev for maximum quality
 
 ### Production (Commercial)
-- Use **Klein 4B** (Apache 2.0 license allows commercial use)
-- Dev is non-commercial only
+- Use **Klein 4B** only (Apache 2.0 license)
+- Dev and Klein 9B are non-commercial only
 
 ### Production (Non-Commercial)
 - Use **Dev** for hero images
-- Use **Klein 4B** for variations and exploration
+- Use **Klein 9B** for secondary images needing quality
+- Use **Klein 4B** for rapid variations and exploration
 
 ---
 
@@ -129,6 +157,7 @@ flux2 t2i "a cat wearing sunglasses, sitting on a sunny beach" \
 | Model | Minimum RAM | Recommended RAM |
 |-------|-------------|-----------------|
 | Flux.2 Dev (qint8) | 64GB | 96GB+ |
+| Klein 9B (bf16) | 32GB | 48GB+ |
 | Klein 4B (qint8) | 16GB | 32GB+ |
 | Klein 4B (bf16) | 16GB | 32GB+ |
 
