@@ -190,6 +190,48 @@ See [i2i_map_paris/README.md](i2i_map_paris/README.md) for full technical detail
 
 ---
 
+### Multi-Reference I2I: Cat + Hat + Jacket
+
+This example demonstrates **multi-reference Image-to-Image** where elements from multiple images are combined based on explicit prompt instructions.
+
+**Prompt:** `"Modify the cat on image 1 to wear the hat from image 2 and the jacket from image 3"`
+
+**Reference Images:**
+
+| Image 1 (Cat) | Image 2 (Hat) | Image 3 (Jacket) |
+|---------------|---------------|------------------|
+| ![Cat](cat_beach_standard/final.png) | ![Hat](hat.jpg) | ![Jacket](jacket.jpg) |
+
+**Parameters:**
+- Size: 1024x1024
+- Steps: 28
+- Strength: 0.7
+- Generation Time: ~3.1 hours
+
+**Generation Progress:**
+
+| Step 7 (25%) | Step 14 (50%) | Step 21 (75%) | Step 28 (100%) |
+|--------------|---------------|---------------|----------------|
+| ![Step 7](i2i_cat_hat_jacket/checkpoints/step_007.png) | ![Step 14](i2i_cat_hat_jacket/checkpoints/step_014.png) | ![Step 21](i2i_cat_hat_jacket/checkpoints/step_021.png) | ![Step 28](i2i_cat_hat_jacket/checkpoints/step_028.png) |
+
+**Final Output:**
+
+![Output](i2i_cat_hat_jacket/output.png)
+
+**Command:**
+```bash
+flux2 i2i "Modify the cat on image 1 to wear the hat from image 2 and the jacket from image 3" \
+  --images cat.png --images hat.jpg --images jacket.jpg \
+  --strength 0.7 --steps 28 \
+  --checkpoint 7 -o output.png
+```
+
+> **Key insight:** The prompt explicitly references images by number ("image 1", "image 2", "image 3"). The model uses multi-reference conditioning where each image gets unique T-coordinates, allowing the transformer to distinguish and extract specific elements from each reference.
+
+See [i2i_cat_hat_jacket/README.md](i2i_cat_hat_jacket/README.md) for full technical details.
+
+---
+
 ## CLI Commands Summary
 
 ```bash
@@ -214,6 +256,12 @@ flux2 t2i "describe what you see" \
   --interpret reference.png \
   --width 1024 --height 1024 --steps 28 \
   -o interpreted.png
+
+# Multi-reference I2I (combine elements from multiple images)
+flux2 i2i "Modify the cat on image 1 to wear the hat from image 2 and the jacket from image 3" \
+  --images cat.png --images hat.jpg --images jacket.jpg \
+  --strength 0.7 --steps 28 \
+  -o combined.png
 ```
 
 ---
