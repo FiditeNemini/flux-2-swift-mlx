@@ -266,10 +266,101 @@ flux2 i2i "Modify the cat on image 1 to wear the hat from image 2 and the jacket
 
 ---
 
+---
+
+## Flux.2 Klein 4B - Fast Generation
+
+**Klein 4B** is a distilled version of Flux.2 optimized for speed:
+- **4 billion parameters** (vs 32B for Dev)
+- **4 inference steps** (vs 28-50 for Dev)
+- **guidance_scale = 1.0** (vs 4.0 for Dev)
+- **Apache 2.0 license** (commercial use allowed)
+- **~13GB VRAM** (vs ~60GB for Dev)
+
+### Beaver Building a Dam
+
+**Prompt:** `"a beaver building a dam in a forest stream, detailed fur, water reflections"`
+
+| 256×256 (50 steps, test) | 1024×1024 (4 steps) |
+|--------------------------|---------------------|
+| ![256](klein_4b/beaver_256.png) | ![1024](klein_4b/beaver_1024.png) |
+
+**Parameters:**
+- Steps: 4
+- Guidance: 1.0
+- Generation time: ~33s (1024×1024)
+
+**Command:**
+```bash
+flux2 t2i "a beaver building a dam in a forest stream, detailed fur, water reflections" \
+  --model klein-4b \
+  -o beaver.png
+```
+
+> **Note:** With `--model klein-4b`, the CLI automatically uses steps=4 and guidance=1.0
+
+---
+
+### Eagle Over Mountains
+
+**Prompt:** `"a majestic eagle flying over mountains at sunset, dramatic lighting"`
+
+![Eagle](klein_4b/eagle_1536x1024.png)
+
+**Parameters:**
+- Size: 1536×1024
+- Steps: 4
+- Guidance: 1.0
+- Generation time: ~55s
+
+**Command:**
+```bash
+flux2 t2i "a majestic eagle flying over mountains at sunset, dramatic lighting" \
+  --model klein-4b -w 1536 -h 1024 \
+  -o eagle.png
+```
+
+---
+
+### Futuristic City (2048×2048)
+
+**Prompt:** `"a futuristic city with flying cars and neon lights at night"`
+
+![City](klein_4b/city_2048.png)
+
+**Parameters:**
+- Size: 2048×2048 (maximum tested)
+- Steps: 4
+- Guidance: 1.0
+- Generation time: ~298s (~5 min)
+
+**Command:**
+```bash
+flux2 t2i "a futuristic city with flying cars and neon lights at night" \
+  --model klein-4b -w 2048 -h 2048 \
+  -o city.png
+```
+
+---
+
+### Klein 4B vs Dev Comparison
+
+| Feature | Klein 4B | Dev |
+|---------|----------|-----|
+| Parameters | 4B | 32B |
+| Default Steps | **4** | 50 |
+| Default Guidance | **1.0** | 4.0 |
+| Text Encoder | Qwen3-4B | Mistral Small 3.2 |
+| VRAM Usage | ~13GB | ~60GB |
+| License | **Apache 2.0** | Non-commercial |
+| 1024×1024 Time | ~33s | ~35min |
+
+---
+
 ## Hardware
 
 - **Machine:** MacBook Pro 14" (Nov 2023)
 - **Chip:** Apple M3 Max
 - **RAM:** 96 GB Unified Memory
 - **macOS:** Tahoe 26.2
-- **Quantization:** 8-bit text encoder + qint8 transformer (~60GB peak)
+- **Quantization:** 8-bit text encoder + qint8 transformer (~60GB peak for Dev, ~13GB for Klein)

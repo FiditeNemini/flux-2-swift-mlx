@@ -34,13 +34,24 @@ flux2 t2i <prompt> [options]
 | `--output` | `-o` | `output.png` | Output file path |
 | `--width` | `-w` | `1024` | Image width in pixels |
 | `--height` | `-h` | `1024` | Image height in pixels |
-| `--steps` | `-s` | `50` | Number of inference steps |
-| `--guidance` | `-g` | `4.0` | Guidance scale (CFG) |
+| `--model` | | `dev` | Model variant: `dev` (32B), `klein-4b` (4B), `klein-9b` (9B) |
+| `--steps` | `-s` | varies* | Number of inference steps |
+| `--guidance` | `-g` | varies* | Guidance scale (CFG) |
 | `--seed` | | random | Random seed for reproducibility |
 | `--text-quant` | | `8bit` | Text encoder quantization: `bf16`, `8bit`, `6bit`, `4bit` |
 | `--transformer-quant` | | `qint8` | Transformer quantization: `bf16`, `qint8`, `qint4` |
+| `--upsample-prompt` | | | Enhance prompt with visual details before encoding |
+| `--interpret` | | | Image to analyze with VLM and inject into prompt |
 | `--checkpoint` | | | Save intermediate images every N steps |
 | `--debug` | | | Enable verbose debug output |
+| `--profile` | | | Enable performance profiling |
+
+\* **Model-specific defaults:**
+| Model | Steps | Guidance |
+|-------|-------|----------|
+| `dev` | 50 | 4.0 |
+| `klein-4b` | **4** | **1.0** |
+| `klein-9b` | **4** | **1.0** |
 
 ### Examples
 
@@ -81,6 +92,34 @@ flux2 t2i "landscape painting" \
   --transformer-quant qint8 \
   --output landscape.png
 ```
+
+### Klein 4B (Fast Generation)
+
+Klein 4B is optimized for speed with only 4 steps and guidance=1.0. These defaults are applied automatically when using `--model klein-4b`.
+
+**Basic Klein generation:**
+```bash
+flux2 t2i "a beaver building a dam" --model klein-4b
+# Uses: steps=4, guidance=1.0 automatically
+```
+
+**Klein at higher resolution:**
+```bash
+flux2 t2i "a majestic eagle flying over mountains at sunset" \
+  --model klein-4b \
+  --width 1536 --height 1024 \
+  -o eagle.png
+```
+
+**Klein at maximum resolution (2048×2048):**
+```bash
+flux2 t2i "a futuristic city with flying cars and neon lights" \
+  --model klein-4b \
+  --width 2048 --height 2048 \
+  -o city.png
+```
+
+> **Note:** Klein 4B uses ~13GB VRAM (vs ~60GB for Dev) and generates images in ~33s at 1024×1024 (vs ~35min for Dev).
 
 ---
 
