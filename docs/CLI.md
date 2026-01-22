@@ -1,7 +1,5 @@
 # Flux.2 CLI Documentation
 
-> **⚠️ WORK IN PROGRESS** - Some features may not be fully implemented yet.
-
 The `flux2` command-line tool provides access to Flux.2 image generation on Mac with MLX.
 
 ## Commands
@@ -9,7 +7,7 @@ The `flux2` command-line tool provides access to Flux.2 image generation on Mac 
 | Command | Description |
 |---------|-------------|
 | `t2i` | Text-to-Image generation (default) |
-| `i2i` | Image-to-Image generation *(not yet implemented)* |
+| `i2i` | Image-to-Image generation with 1-3 reference images |
 | `download` | Download required models |
 | `info` | Show system and model information |
 
@@ -88,14 +86,29 @@ flux2 t2i "landscape painting" \
 
 ## Image-to-Image (i2i)
 
-> ⚠️ **Not yet implemented** - This feature is planned for a future release.
+Transform or combine images using a text prompt. Flux.2 supports two modes:
 
-Generate images using reference images as guidance.
+### Two Modes of Operation
+
+**1. Traditional I2I (Single Image + Strength < 1.0)**
+- Encodes the input image, mixes with noise based on strength, then denoises
+- Lower strength = more of the original image preserved
+- Use for: style transfer, subtle modifications, preserving structure
+
+**2. Multi-Image Conditioning (2-3 Images OR Strength = 1.0)**
+- Reference images provide visual context for generation
+- Output starts from random noise, references guide the transformer
+- Full denoising (all steps, no timestep skip)
+- Use for: combining elements from multiple images, inspired generation
 
 ### Usage
 
 ```bash
-flux2 i2i <prompt> --images <image1> [image2] [image3] [options]
+# Traditional I2I (single image with strength)
+flux2 i2i <prompt> --images <reference_image> --strength 0.7 [options]
+
+# Multi-image conditioning
+flux2 i2i <prompt> --images <img1> --images <img2> [--images <img3>] [options]
 ```
 
 ### Arguments
@@ -108,13 +121,109 @@ flux2 i2i <prompt> --images <image1> [image2] [image3] [options]
 
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
-| `--images` | `-i` | required | Reference image(s), 1-3 images |
+| `--images` | `-i` | required | Reference image to transform |
 | `--output` | `-o` | `output.png` | Output file path |
-| `--steps` | `-s` | `50` | Number of inference steps |
+| `--width` | `-w` | from image | Output width (default: first reference image) |
+| `--height` | `-h` | from image | Output height (default: first reference image) |
+| `--steps` | `-s` | `28` | Number of **effective** denoising steps |
+| `--total-steps` | | false | Interpret `--steps` as total steps before strength reduction |
+| `--strength` | | `0.8` | Denoising strength (0.0-1.0). Lower = preserve more original |
 | `--guidance` | `-g` | `4.0` | Guidance scale |
 | `--seed` | | random | Random seed |
+| `--upsample-prompt` | | false | Enhance prompt with Mistral before encoding |
+| `--checkpoint` | | | Save intermediate images every N steps |
+| `--profile` | | false | Show detailed performance profiling |
 | `--text-quant` | | `8bit` | Text encoder quantization |
 | `--transformer-quant` | | `qint8` | Transformer quantization |
+
+### Understanding Strength
+
+The `--strength` parameter controls how much of the original image is preserved:
+
+| Strength | Effect | Use Case |
+|----------|--------|----------|
+| `1.0` | Full denoising (ignores reference) | Maximum creativity |
+| `0.8` | 80% new, 20% original | Default - good balance |
+| `0.5` | 50/50 mix | Moderate changes |
+| `0.3` | 30% new, 70% original | Subtle modifications |
+
+### Understanding Steps
+
+By default, `--steps` specifies **effective steps** (what you actually get):
+
+```bash
+flux2 i2i "prompt" --steps 28 --strength 0.7
+# Output: "Steps: 28 effective (total: 40)"
+```
+
+Use `--total-steps` for the legacy behavior where strength reduces the step count:
+
+```bash
+flux2 i2i "prompt" --steps 28 --strength 0.7 --total-steps
+# Output: "Steps: 19 effective (from 28 total)"
+```
+
+### Examples
+
+**Style transfer:**
+```bash
+flux2 i2i "transform into a watercolor painting" \
+  --images photo.jpg \
+  --strength 0.7 \
+  --steps 28 \
+  --output watercolor.png
+```
+
+**With prompt upsampling:**
+```bash
+flux2 i2i "make it look like a cyberpunk scene" \
+  --images original.jpg \
+  --strength 0.6 \
+  --upsample-prompt \
+  --output cyberpunk.png
+```
+
+**Save progress checkpoints:**
+```bash
+flux2 i2i "artistic interpretation" \
+  --images original.jpg \
+  --strength 0.8 \
+  --steps 20 \
+  --checkpoint 5 \
+  --profile \
+  --output artistic.png
+# Saves: artistic_checkpoints/step_005.png, step_010.png, etc.
+```
+
+**Preserve more of original (lower strength):**
+```bash
+flux2 i2i "add subtle vintage film grain effect" \
+  --images photo.jpg \
+  --strength 0.3 \
+  --steps 28 \
+  --output vintage.png
+```
+
+**Multi-image conditioning (combine elements):**
+```bash
+flux2 i2i "a cat wearing the jacket" \
+  --images cat.jpg \
+  --images jacket.jpg \
+  --steps 28 \
+  --output cat_with_jacket.png
+```
+
+**Multi-image conditioning (inspired by references):**
+```bash
+flux2 i2i "create a scene combining these elements" \
+  --images landscape.jpg \
+  --images character.jpg \
+  --images style_reference.jpg \
+  --steps 28 \
+  --output combined.png
+```
+
+> **Note:** Multi-image mode ignores the `--strength` parameter and always performs full denoising. Reference images provide visual context that guides the transformer's attention during generation.
 
 ---
 

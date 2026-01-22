@@ -18,6 +18,7 @@ struct Flux2CLI: AsyncParsableCommand {
             ImageToImage.self,
             Download.self,
             Info.self,
+            VLMTest.self,
         ],
         defaultSubcommand: TextToImage.self
     )
@@ -67,6 +68,9 @@ struct TextToImage: AsyncParsableCommand {
     @Flag(name: .long, help: "Enhance prompt with more visual details before encoding")
     var upsamplePrompt: Bool = false
 
+    @Option(name: .long, help: "Image to analyze with VLM and inject description into prompt (semantic interpretation)")
+    var interpret: [String] = []
+
     @Option(name: .long, help: "Save intermediate images at each N steps (e.g., 5 saves every 5 steps)")
     var checkpoint: Int?
 
@@ -104,8 +108,23 @@ struct TextToImage: AsyncParsableCommand {
             print()
         }
 
+        // Validate interpret image paths exist
+        var interpretImagePaths: [String] = []
+        for path in interpret {
+            guard FileManager.default.fileExists(atPath: path) else {
+                throw ValidationError("Interpret image not found: \(path)")
+            }
+            interpretImagePaths.append(path)
+        }
+
         print("Generating image...")
         print("  Prompt: \"\(prompt)\"")
+        if !interpretImagePaths.isEmpty {
+            print("  Interpret images: \(interpretImagePaths.count) (VLM will analyze and enrich prompt)")
+            for path in interpretImagePaths {
+                print("    - \(path)")
+            }
+        }
         if upsamplePrompt {
             print("  Prompt upsampling: enabled (will enhance prompt with visual details)")
         }
@@ -159,6 +178,7 @@ struct TextToImage: AsyncParsableCommand {
 
         let image = try await pipeline.generateTextToImage(
             prompt: prompt,
+            interpretImagePaths: interpretImagePaths.isEmpty ? nil : interpretImagePaths,
             height: height,
             width: width,
             steps: steps,
@@ -198,57 +218,123 @@ struct TextToImage: AsyncParsableCommand {
 struct ImageToImage: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "i2i",
-        abstract: "Generate image with reference images"
+        abstract: "Transform an image using a text prompt (image-to-image)"
     )
 
-    @Argument(help: "Text prompt")
+    @Argument(help: "Text prompt describing the desired output")
     var prompt: String
 
-    @Option(name: .shortAndLong, help: "Reference image(s), up to 3")
+    @Option(name: .shortAndLong, help: "Reference image for visual conditioning")
     var images: [String]
+
+    @Option(name: .long, help: "Image to analyze with VLM and inject description into prompt (not used as visual reference)")
+    var interpret: [String] = []
 
     @Option(name: .shortAndLong, help: "Output file path")
     var output: String = "output.png"
 
-    @Option(name: .shortAndLong, help: "Number of inference steps")
-    var steps: Int = 50
+    @Option(name: .shortAndLong, help: "Number of effective denoising steps (what you actually get)")
+    var steps: Int = 28
+
+    @Flag(name: .long, help: "Interpret --steps as total steps before strength reduction (legacy behavior)")
+    var totalSteps: Bool = false
 
     @Option(name: .shortAndLong, help: "Guidance scale")
     var guidance: Float = 4.0
 
-    @Option(name: .long, help: "Random seed")
+    @Option(name: .long, help: "Random seed for reproducibility")
     var seed: UInt64?
 
-    @Option(name: .long, help: "Text encoder quantization")
+    @Option(name: .shortAndLong, help: "Output image width (default: from first reference image)")
+    var width: Int?
+
+    @Option(name: .shortAndLong, help: "Output image height (default: from first reference image)")
+    var height: Int?
+
+    @Option(name: .long, help: "Denoising strength (0.0-1.0). Lower = preserve more of original image")
+    var strength: Float = 0.8
+
+    @Flag(name: .long, help: "Enhance prompt with visual details using Mistral before encoding")
+    var upsamplePrompt: Bool = false
+
+    @Option(name: .long, help: "Save checkpoint image every N steps")
+    var checkpoint: Int?
+
+    @Flag(name: .long, help: "Show detailed performance profiling")
+    var profile: Bool = false
+
+    @Option(name: .long, help: "Text encoder quantization: bf16, 8bit, 6bit, 4bit")
     var textQuant: String = "8bit"
 
-    @Option(name: .long, help: "Transformer quantization")
+    @Option(name: .long, help: "Transformer quantization: bf16, qint8, qint4")
     var transformerQuant: String = "qint8"
 
     func run() async throws {
-        // Validate image count
+        let startTime = Date()
+
+        // Validate image count (1-3 reference images)
         guard !images.isEmpty && images.count <= 3 else {
-            throw ValidationError("Provide 1 to 3 reference images")
+            if images.isEmpty {
+                throw ValidationError("Please provide 1-3 reference images with --images")
+            } else {
+                throw ValidationError("Maximum 3 reference images allowed")
+            }
         }
 
-        // Load reference images
+        // Validate strength
+        guard strength > 0.0 && strength <= 1.0 else {
+            throw ValidationError("Strength must be between 0.0 and 1.0")
+        }
+
+        // Configure profiling
+        if profile {
+            Flux2Profiler.shared.enable()
+        }
+
+        // Load reference images (visual conditioning)
         var refImages: [CGImage] = []
         for path in images {
             guard let image = loadImage(from: path) else {
                 throw ValidationError("Failed to load image: \(path)")
             }
             refImages.append(image)
+            print("Loaded reference image: \(path) (\(image.width)x\(image.height))")
         }
 
-        print("Loaded \(refImages.count) reference image(s)")
+        // Validate interpret image paths exist (VLM will load them directly)
+        var interpretImagePaths: [String] = []
+        for path in interpret {
+            guard FileManager.default.fileExists(atPath: path) else {
+                throw ValidationError("Interpret image not found: \(path)")
+            }
+            interpretImagePaths.append(path)
+            print("Will interpret image: \(path) [VLM analysis]")
+        }
+
+        print("Mode: Image-to-Image (Flux.2 conditioning)")
+
+        // Show output dimensions
+        let outputWidth = width ?? refImages[0].width
+        let outputHeight = height ?? refImages[0].height
+        print("Output size: \(outputWidth)x\(outputHeight)")
+
+        // Note: Flux.2 I2I uses conditioning mode, not SD-style noise injection
+        // The reference image provides visual context to the transformer
+        // Strength parameter is accepted for API compatibility but doesn't skip timesteps
+        let actualSteps = steps
+        print("Steps: \(actualSteps)")
+
+        if upsamplePrompt {
+            print("Prompt upsampling: enabled")
+        }
 
         // Parse quantization
         guard let textQuantization = MistralQuantization(rawValue: textQuant) else {
-            throw ValidationError("Invalid text quantization: \(textQuant)")
+            throw ValidationError("Invalid text quantization: \(textQuant). Use: bf16, 8bit, 6bit, 4bit")
         }
 
         guard let transformerQuantization = TransformerQuantization(rawValue: transformerQuant) else {
-            throw ValidationError("Invalid transformer quantization: \(transformerQuant)")
+            throw ValidationError("Invalid transformer quantization: \(transformerQuant). Use: bf16, qint8, qint4")
         }
 
         let quantConfig = Flux2QuantizationConfig(
@@ -259,23 +345,66 @@ struct ImageToImage: AsyncParsableCommand {
         // Create pipeline
         let pipeline = Flux2Pipeline(quantization: quantConfig)
 
+        // Setup checkpoint directory if needed
+        let checkpointDir: String?
+        if let interval = checkpoint, interval > 0 {
+            let baseName = (output as NSString).deletingPathExtension
+            checkpointDir = "\(baseName)_checkpoints"
+            try FileManager.default.createDirectory(
+                atPath: checkpointDir!,
+                withIntermediateDirectories: true
+            )
+            print("Checkpoints will be saved to: \(checkpointDir!)")
+        } else {
+            checkpointDir = nil
+        }
+
         print("Generating image...")
 
         let image = try await pipeline.generateImageToImage(
             prompt: prompt,
             images: refImages,
-            steps: steps,
+            interpretImagePaths: interpretImagePaths.isEmpty ? nil : interpretImagePaths,
+            height: height,
+            width: width,
+            steps: actualSteps,
             guidance: guidance,
-            seed: seed
-        ) { current, total in
-            print("\rStep \(current)/\(total)", terminator: "")
-            fflush(stdout)
-        }
+            seed: seed,
+            strength: strength,
+            upsamplePrompt: upsamplePrompt,
+            checkpointInterval: checkpoint,
+            onProgress: { current, total in
+                let progress = Float(current) / Float(total) * 100
+                print("\rStep \(current)/\(total) [\(String(format: "%.0f", progress))%]", terminator: "")
+                fflush(stdout)
+            },
+            onCheckpoint: { step, checkpointImage in
+                if let dir = checkpointDir {
+                    let checkpointPath = "\(dir)/step_\(String(format: "%03d", step)).png"
+                    do {
+                        try saveImage(checkpointImage, to: checkpointPath)
+                        print("\n  Checkpoint saved: step_\(String(format: "%03d", step)).png")
+                    } catch {
+                        print("\n  Failed to save checkpoint at step \(step): \(error.localizedDescription)")
+                    }
+                }
+            }
+        )
 
         print()
 
+        let elapsed = Date().timeIntervalSince(startTime)
+        print("Generation completed in \(String(format: "%.1f", elapsed))s")
+
+        // Save image
         try saveImage(image, to: output)
         print("Image saved to \(output)")
+
+        // Show profiler report if requested
+        if profile {
+            print()
+            print(Flux2Profiler.shared.generateReport())
+        }
     }
 }
 

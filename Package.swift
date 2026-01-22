@@ -10,11 +10,11 @@ let package = Package(
         .executable(name: "Flux2App", targets: ["Flux2App"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.0"),
+        .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.30.2"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.2.0"),
-        .package(url: "https://github.com/huggingface/swift-transformers", from: "0.1.14"),
-        // MistralCore depuis GitHub
-        .package(url: "https://github.com/VincentGourbin/mistral-small-3.2-swift-mlx", branch: "main"),
+        .package(url: "https://github.com/huggingface/swift-transformers", from: "1.1.6"),
+        // Flux2 Text Encoders (MistralCore + FluxTextEncoders) depuis GitHub
+        .package(url: "https://github.com/VincentGourbin/flux2-text-encoders-swift-mlx", branch: "main"),
     ],
     targets: [
         .target(
@@ -25,7 +25,7 @@ let package = Package(
                 .product(name: "MLXRandom", package: "mlx-swift"),
                 .product(name: "MLXFast", package: "mlx-swift"),
                 .product(name: "Transformers", package: "swift-transformers"),
-                .product(name: "MistralCore", package: "mistral-small-3.2-swift-mlx"),
+                .product(name: "FluxTextEncoders", package: "flux2-text-encoders-swift-mlx"),
             ]
         ),
         .executableTarget(

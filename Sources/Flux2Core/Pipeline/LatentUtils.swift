@@ -176,6 +176,41 @@ public enum LatentUtils {
         return packed.reshaped([B, numPatches, patchDim])
     }
 
+    /// Convert VAE latents to patchified format
+    /// Converts [B, 32, H/8, W/8] to [B, 128, H/16, W/16]
+    /// This is used for I2I where VAE encodes reference images
+    /// - Parameters:
+    ///   - latents: VAE latents [B, 32, H/8, W/8]
+    ///   - patchSize: Patch size (default 2 for Flux.2)
+    /// - Returns: Patchified latents [B, 128, H/16, W/16]
+    public static func packLatentsToPatchified(
+        _ latents: MLXArray,
+        patchSize: Int = 2
+    ) -> MLXArray {
+        let shape = latents.shape
+        let B = shape[0]
+        let C = shape[1]  // 32
+        let H = shape[2]  // H/8
+        let W = shape[3]  // W/8
+
+        // Target dimensions
+        let patchifiedH = H / patchSize  // H/16
+        let patchifiedW = W / patchSize  // W/16
+        let patchifiedC = C * patchSize * patchSize  // 128
+
+        // Reshape: [B, C, H, W] -> [B, C, pH, patchSize, pW, patchSize]
+        var packed = latents.reshaped([B, C, patchifiedH, patchSize, patchifiedW, patchSize])
+
+        // Permute to group patches: [B, pH, pW, C, patchSize, patchSize]
+        packed = packed.transposed(0, 2, 4, 1, 3, 5)
+
+        // Reshape to [B, pH, pW, C*patchSize*patchSize] = [B, pH, pW, 128]
+        packed = packed.reshaped([B, patchifiedH, patchifiedW, patchifiedC])
+
+        // Transpose to NCHW: [B, 128, pH, pW]
+        return packed.transposed(0, 3, 1, 2)
+    }
+
     /// Unpack latents from transformer output (legacy)
     /// Converts [B, (H/p)*(W/p), C*p*p] back to [B, C, H, W]
     /// - Parameters:
@@ -268,6 +303,66 @@ public enum LatentUtils {
         let combinedIds = concatenated([textIds, imageIds], axis: 0)
 
         return (textIds: textIds, imageIds: imageIds, combinedIds: combinedIds)
+    }
+
+    // MARK: - Reference Image Position IDs (for I2I)
+
+    /// Generate position IDs for reference image latents in I2I mode
+    /// Each reference image gets a unique T-coordinate (time dimension) to distinguish them
+    /// This follows Flux.2's multi-image handling where images are concatenated along sequence
+    /// - Parameters:
+    ///   - latentHeights: Height of each reference image's latents (H/16 after patchification)
+    ///   - latentWidths: Width of each reference image's latents (W/16 after patchification)
+    ///   - scale: Time scale factor between reference images (default 10)
+    /// - Returns: Position IDs for all reference images concatenated [total_seq_len, 4]
+    public static func generateReferenceImagePositionIDs(
+        latentHeights: [Int],
+        latentWidths: [Int],
+        scale: Int = 10
+    ) -> MLXArray {
+        var allPositions: [Int32] = []
+
+        for (imageIndex, (h, w)) in zip(latentHeights, latentWidths).enumerated() {
+            // Each image gets a unique T-coordinate: scale + scale * imageIndex
+            // This separates reference images in the "time" dimension for attention
+            let tCoord = Int32(scale + scale * imageIndex)
+
+            for hIdx in 0..<h {
+                for wIdx in 0..<w {
+                    // Position encoding: [T, H, W, L=0]
+                    allPositions.append(contentsOf: [tCoord, Int32(hIdx), Int32(wIdx), 0])
+                }
+            }
+        }
+
+        let totalSeqLen = latentHeights.enumerated().reduce(0) { $0 + latentHeights[$1.offset] * latentWidths[$1.offset] }
+        return MLXArray(allPositions).reshaped([totalSeqLen, 4])
+    }
+
+    /// Generate position IDs for a single reference image
+    /// - Parameters:
+    ///   - latentHeight: Height of reference image's latents (H/16)
+    ///   - latentWidth: Width of reference image's latents (W/16)
+    ///   - imageIndex: Index of this image (0, 1, 2, ...)
+    ///   - scale: Time scale factor (default 10)
+    /// - Returns: Position IDs [seq_len, 4]
+    public static func generateSingleReferenceImagePositionIDs(
+        latentHeight: Int,
+        latentWidth: Int,
+        imageIndex: Int,
+        scale: Int = 10
+    ) -> MLXArray {
+        var positions: [Int32] = []
+        let tCoord = Int32(scale + scale * imageIndex)
+
+        for h in 0..<latentHeight {
+            for w in 0..<latentWidth {
+                positions.append(contentsOf: [tCoord, Int32(h), Int32(w), 0])
+            }
+        }
+
+        let seqLen = latentHeight * latentWidth
+        return MLXArray(positions).reshaped([seqLen, 4])
     }
 
     // MARK: - Image Size Validation

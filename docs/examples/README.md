@@ -116,25 +116,152 @@ The prompt upsampling feature uses Mistral to enhance the original prompt with m
 
 ---
 
-## CLI Commands Used
+## Image-to-Image Examples
+
+### I2I - Artistic Variation (Watercolor)
+
+**Prompt:** `"transform into a beautiful watercolor painting with soft brushstrokes and vibrant colors"`
+
+**Reference:** Cat on beach (single image)
+
+**Parameters:**
+- Size: 1024x1024
+- Steps: 28 effective
+- Strength: 0.7 (30% original preserved)
+- Prompt upsampling: disabled
+
+| Step 7 | Step 14 | Step 21 | Final (Step 28) |
+|--------|---------|---------|-----------------|
+| ![Step 7](i2i_artistic_variation/step_007.png) | ![Step 14](i2i_artistic_variation/step_014.png) | ![Step 21](i2i_artistic_variation/step_021.png) | ![Final](i2i_artistic_variation/final.png) |
+
+**Command:**
+```bash
+flux2 i2i "transform into a beautiful watercolor painting with soft brushstrokes and vibrant colors" \
+  --images cat_beach_upsampled.png \
+  --strength 0.7 --steps 28 \
+  --checkpoint 7 --profile \
+  --output artistic_variation.png
+```
+
+> **Note:** The I2I mode transforms the input image by encoding it with VAE, adding noise based on strength, and denoising with the text prompt as guidance. Lower strength preserves more of the original image.
+
+---
+
+### Image Interpretation: Map to Paris Photo (I2I + T2I Upsampling Chain)
+
+This example demonstrates the **`--interpret`** feature which chains I2I and T2I upsampling:
+
+1. **I2I Upsampling**: VLM analyzes the image and interprets the user's request
+2. **T2I Upsampling**: The interpretation is enriched into a detailed generation prompt
+3. **Generation**: Flux.2 generates a new image based on the enriched prompt
+
+**Prompt:** `"Describe what the red arrow is seeing"`
+
+**Input:** A map of Paris with a red arrow pointing from Tour Eiffel towards Place de la Bastille
+
+| Input Map | Generated Photo |
+|-----------|-----------------|
+| ![Input](i2i_map_paris/input_map.png) | ![Output](i2i_map_paris/output.png) |
+
+**VLM Interpretation (Step 1 - I2I):**
+> "Highlight the view from the Eiffel Tower towards Place de la Bastille, keeping the red arrow direction unchanged. Enhance visibility of landmarks along this axis including Musée d'Orsay, Palais Garnier, and Place de la Bastille..."
+
+**Enriched Prompt (Step 2 - T2I):**
+> "The red arrow is directed towards a panoramic view from the Eiffel Tower, capturing a sweeping perspective of Parisian landmarks along its axis. The view should prominently feature the Musée d'Orsay, a grand, U-shaped Beaux-Arts building with a distinctive clock facade, situated along the left bank of the Seine River..."
+
+**Generation Progress:**
+
+| Step 7 (25%) | Step 14 (50%) | Step 21 (75%) | Step 28 (100%) |
+|--------------|---------------|---------------|----------------|
+| ![Step 7](i2i_map_paris/output_checkpoints/step_007.png) | ![Step 14](i2i_map_paris/output_checkpoints/step_014.png) | ![Step 21](i2i_map_paris/output_checkpoints/step_021.png) | ![Step 28](i2i_map_paris/output_checkpoints/step_028.png) |
+
+**Command:**
+```bash
+flux2 t2i "Describe what the red arrow is seeing" \
+  --interpret map.png \
+  --width 1024 --height 1024 \
+  --steps 28 --checkpoint 7 \
+  -o output.png
+```
+
+> **Key insight:** The `--interpret` flag enables VLM image understanding. Instead of just describing the map, the model interprets the user's semantic intent ("what the arrow is seeing") and generates a photorealistic image of the Parisian landmarks along the arrow's path.
+
+See [i2i_map_paris/README.md](i2i_map_paris/README.md) for full technical details.
+
+---
+
+### Multi-Reference I2I: Cat + Hat + Jacket
+
+This example demonstrates **multi-reference Image-to-Image** where elements from multiple images are combined based on explicit prompt instructions.
+
+**Prompt:** `"Modify the cat on image 1 to wear the hat from image 2 and the jacket from image 3"`
+
+**Reference Images:**
+
+| Image 1 (Cat) | Image 2 (Hat) | Image 3 (Jacket) |
+|---------------|---------------|------------------|
+| ![Cat](cat_beach_standard/final.png) | ![Hat](hat.jpg) | ![Jacket](jacket.jpg) |
+
+**Parameters:**
+- Size: 1024x1024
+- Steps: 28
+- Strength: 0.7
+- Generation Time: ~3.1 hours
+
+**Generation Progress:**
+
+| Step 7 (25%) | Step 14 (50%) | Step 21 (75%) | Step 28 (100%) |
+|--------------|---------------|---------------|----------------|
+| ![Step 7](i2i_cat_hat_jacket/checkpoints/step_007.png) | ![Step 14](i2i_cat_hat_jacket/checkpoints/step_014.png) | ![Step 21](i2i_cat_hat_jacket/checkpoints/step_021.png) | ![Step 28](i2i_cat_hat_jacket/checkpoints/step_028.png) |
+
+**Final Output:**
+
+![Output](i2i_cat_hat_jacket/output.png)
+
+**Command:**
+```bash
+flux2 i2i "Modify the cat on image 1 to wear the hat from image 2 and the jacket from image 3" \
+  --images cat.png --images hat.jpg --images jacket.jpg \
+  --strength 0.7 --steps 28 \
+  --checkpoint 7 -o output.png
+```
+
+> **Key insight:** The prompt explicitly references images by number ("image 1", "image 2", "image 3"). The model uses multi-reference conditioning where each image gets unique T-coordinates, allowing the transformer to distinguish and extract specific elements from each reference.
+
+See [i2i_cat_hat_jacket/README.md](i2i_cat_hat_jacket/README.md) for full technical details.
+
+---
+
+## CLI Commands Summary
 
 ```bash
-# Standard generation
-.build/release/Flux2CLI t2i "a cat wearing sunglasses, sitting on a sunny beach" \
-  --width 1024 --height 1024 \
-  --steps 28 --guidance 4.0 \
-  --checkpoint 7 \
-  --profile \
-  --output cat_beach.png
+# Standard T2I generation
+flux2 t2i "a cat wearing sunglasses, sitting on a sunny beach" \
+  --width 1024 --height 1024 --steps 28 \
+  --checkpoint 7 -o cat_beach.png
 
-# With prompt upsampling
-.build/release/Flux2CLI t2i "a cat wearing sunglasses, sitting on a sunny beach" \
-  --width 1024 --height 1024 \
-  --steps 28 --guidance 4.0 \
+# T2I with prompt upsampling
+flux2 t2i "a cat wearing sunglasses" \
   --upsample-prompt \
-  --checkpoint 7 \
-  --profile \
-  --output cat_beach_upsampled.png
+  --width 1024 --height 1024 --steps 28 \
+  -o cat_upsampled.png
+
+# I2I artistic transformation
+flux2 i2i "transform into watercolor painting" \
+  --images input.png --strength 0.7 \
+  --steps 28 -o watercolor.png
+
+# T2I with image interpretation (VLM)
+flux2 t2i "describe what you see" \
+  --interpret reference.png \
+  --width 1024 --height 1024 --steps 28 \
+  -o interpreted.png
+
+# Multi-reference I2I (combine elements from multiple images)
+flux2 i2i "Modify the cat on image 1 to wear the hat from image 2 and the jacket from image 3" \
+  --images cat.png --images hat.jpg --images jacket.jpg \
+  --strength 0.7 --steps 28 \
+  -o combined.png
 ```
 
 ---

@@ -17,6 +17,9 @@ test_checkpoints/
 result_checkpoints/
 *.png
 
+# But keep example images
+!docs/examples/**/*.png
+
 # Temporary files
 *.tmp
 *.swp

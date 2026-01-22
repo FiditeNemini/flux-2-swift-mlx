@@ -17,7 +17,13 @@ public enum Flux2GenerationMode: Sendable {
     case textToImage
 
     /// Image-to-Image generation with reference images
-    case imageToImage(images: [CGImage])
+    /// - Parameters:
+    ///   - images: Reference images (1-3). Multiple images are concatenated along sequence dimension
+    ///             with unique time-based position IDs for each, allowing the transformer to
+    ///             attend to all reference images during generation.
+    ///   - strength: Denoising strength (0.0-1.0). 1.0 = full denoising (ignores image),
+    ///               0.5 = 50% denoising, 0.1 = minimal changes
+    case imageToImage(images: [CGImage], strength: Float)
 }
 
 /// Progress callback for generation (currentStep, totalSteps)
@@ -215,6 +221,7 @@ public class Flux2Pipeline: @unchecked Sendable {
     /// - Returns: Generated image
     public func generateTextToImage(
         prompt: String,
+        interpretImagePaths: [String]? = nil,
         height: Int = 1024,
         width: Int = 1024,
         steps: Int = 50,
@@ -228,6 +235,7 @@ public class Flux2Pipeline: @unchecked Sendable {
         try await generate(
             mode: .textToImage,
             prompt: prompt,
+            interpretImagePaths: interpretImagePaths,
             height: height,
             width: width,
             steps: steps,
@@ -243,12 +251,15 @@ public class Flux2Pipeline: @unchecked Sendable {
     /// Generate image with reference images
     /// - Parameters:
     ///   - prompt: Text description
-    ///   - images: 1-3 reference images
-    ///   - height: Optional height (inferred from images if nil)
-    ///   - width: Optional width (inferred from images if nil)
+    ///   - images: 1-3 reference images. Multiple images are concatenated along sequence dimension
+    ///             with unique time-based position IDs, allowing the transformer to attend to all references.
+    ///   - interpretImagePaths: File paths to images to analyze with VLM and inject description into prompt (not used as visual reference)
+    ///   - height: Optional height (inferred from first image if nil)
+    ///   - width: Optional width (inferred from first image if nil)
     ///   - steps: Number of denoising steps
     ///   - guidance: Guidance scale
     ///   - seed: Optional random seed
+    ///   - strength: Denoising strength (0.0-1.0). Default 0.8. Lower = preserve more of original image
     ///   - upsamplePrompt: Enhance prompt with visual details before encoding (default false)
     ///   - checkpointInterval: Save intermediate image every N steps (nil = disabled)
     ///   - onProgress: Optional progress callback
@@ -257,11 +268,13 @@ public class Flux2Pipeline: @unchecked Sendable {
     public func generateImageToImage(
         prompt: String,
         images: [CGImage],
+        interpretImagePaths: [String]? = nil,
         height: Int? = nil,
         width: Int? = nil,
         steps: Int = 50,
         guidance: Float = 4.0,
         seed: UInt64? = nil,
+        strength: Float = 0.8,
         upsamplePrompt: Bool = false,
         checkpointInterval: Int? = nil,
         onProgress: Flux2ProgressCallback? = nil,
@@ -271,13 +284,18 @@ public class Flux2Pipeline: @unchecked Sendable {
             throw Flux2Error.invalidConfiguration("Provide 1-3 reference images")
         }
 
+        guard strength > 0.0 && strength <= 1.0 else {
+            throw Flux2Error.invalidConfiguration("Strength must be between 0.0 and 1.0")
+        }
+
         // Infer dimensions from first image if not provided
         let targetHeight = height ?? images[0].height
         let targetWidth = width ?? images[0].width
 
         return try await generate(
-            mode: .imageToImage(images: images),
+            mode: .imageToImage(images: images, strength: strength),
             prompt: prompt,
+            interpretImagePaths: interpretImagePaths,
             height: targetHeight,
             width: targetWidth,
             steps: steps,
@@ -294,6 +312,7 @@ public class Flux2Pipeline: @unchecked Sendable {
     public func generate(
         mode: Flux2GenerationMode,
         prompt: String,
+        interpretImagePaths: [String]? = nil,
         height: Int,
         width: Int,
         steps: Int,
@@ -327,15 +346,53 @@ public class Flux2Pipeline: @unchecked Sendable {
         let profiler = Flux2Profiler.shared
 
         // === PHASE 1: Text Encoding ===
-        onProgress?(0, steps)
+        // Note: Progress will be reported once denoising loop starts with accurate step count
         Flux2Debug.log("=== PHASE 1: Text Encoding ===")
 
         profiler.start("1. Load Text Encoder")
         try await loadTextEncoder()
         profiler.end("1. Load Text Encoder")
 
+        // === INTERPRET IMAGES: VLM semantic analysis ===
+        // If interpretImagePaths are provided, describe them with VLM and inject into prompt
+        var enrichedPrompt = prompt
+        if let interpretPaths = interpretImagePaths, !interpretPaths.isEmpty {
+            Flux2Debug.log("Interpreting \(interpretPaths.count) image(s) with VLM for prompt injection...")
+            profiler.start("1b. VLM Interpretation")
+
+            let descriptions = try await textEncoder!.describeImagePathsForPrompt(interpretPaths, context: prompt)
+            
+            if !descriptions.isEmpty {
+                // Build enriched prompt with image descriptions
+                let imageContext = descriptions.enumerated().map { (idx, desc) in
+                    "Interpret image \(idx + 1): \(desc)"
+                }.joined(separator: "\n")
+                
+                enrichedPrompt = """
+                \(imageContext)
+                
+                User request: \(prompt)
+                """
+                
+                Flux2Debug.log("Prompt enriched with \(descriptions.count) VLM description(s)")
+                print("[VLM-Interpret] Enriched prompt:\n\(enrichedPrompt)")
+                fflush(stdout)
+            }
+            
+            profiler.end("1b. VLM Interpretation")
+        }
+
         profiler.start("2. Text Encoding")
-        let textEmbeddings = try textEncoder!.encode(prompt, upsample: upsamplePrompt)
+        // Use vision-based upsampling for I2I if enabled
+        let textEmbeddings: MLXArray
+        if upsamplePrompt, case .imageToImage(let images, _) = mode {
+            // Use VLM to analyze reference images and enhance prompt
+            Flux2Debug.log("Using vision-based prompt upsampling for I2I with \(images.count) image(s)")
+            let enhancedPrompt = try await textEncoder!.upsamplePromptWithImages(enrichedPrompt, images: images)
+            textEmbeddings = try textEncoder!.encode(enhancedPrompt, upsample: false)
+        } else {
+            textEmbeddings = try textEncoder!.encode(enrichedPrompt, upsample: upsamplePrompt)
+        }
         eval(textEmbeddings)
         profiler.end("2. Text Encoding")
 
@@ -368,6 +425,7 @@ public class Flux2Pipeline: @unchecked Sendable {
         // Generate initial latents in PATCHIFIED format [B, 128, H/16, W/16]
         // This is the format expected by the BatchNorm normalization
         var patchifiedLatents: MLXArray
+        var i2iStrength: Float = 1.0  // Default for T2I (full denoising)
 
         switch mode {
         case .textToImage:
@@ -378,38 +436,180 @@ public class Flux2Pipeline: @unchecked Sendable {
             )
             Flux2Debug.log("Generated patchified latents: \(patchifiedLatents.shape)")
 
-        case .imageToImage(let images):
-            // Encode reference images and patchify
-            let rawLatents = try encodeReferenceImages(images, height: validHeight, width: validWidth)
-            // Convert from [B, 32, H/8, W/8] to [B, 128, H/16, W/16]
-            patchifiedLatents = LatentUtils.packLatents(rawLatents)
-            // Reshape to NCHW patchified format
-            let B = patchifiedLatents.shape[0]
-            let seqLen = patchifiedLatents.shape[1]
-            let C = patchifiedLatents.shape[2]
-            let pH = validHeight / 16
-            let pW = validWidth / 16
-            patchifiedLatents = patchifiedLatents.reshaped([B, pH, pW, C]).transposed(0, 3, 1, 2)
+        case .imageToImage(let images, let strength):
+            i2iStrength = strength
+            _ = strength  // Note: Flux.2 doesn't use strength like SD - see docs
 
-            // ONLY for image-to-image: Normalize patchified latents with VAE BatchNorm
-            // BatchNorm has 128 features = 32 channels * 2 * 2 patch
-            // NOTE: For text-to-image, we use pure random noise without normalization
-            Flux2Debug.log("Normalizing patchified latents with BatchNorm (I2I mode)...")
-            patchifiedLatents = LatentUtils.normalizeLatentsWithBatchNorm(
-                patchifiedLatents,
+            // === FLUX.2 IMAGE-TO-IMAGE MODE ===
+            // Flux.2 uses CONDITIONING mode for all I2I:
+            // - Reference images are encoded and concatenated as context
+            // - Output starts from random noise (full denoising)
+            // - This is different from SD's "traditional" I2I with noise injection
+            // Generate random noise for OUTPUT
+            patchifiedLatents = LatentUtils.generatePatchifiedLatents(
+                height: validHeight,
+                width: validWidth,
+                seed: seed
+            )
+            eval(patchifiedLatents)
+            Flux2Debug.log("Generated output noise latents: \(patchifiedLatents.shape)")
+
+            // Encode ALL reference images
+            let (referenceLatents, referencePositionIds) = try encodeReferenceImages(
+                images,
+                height: validHeight,
+                width: validWidth
+            )
+            eval(referenceLatents)
+            Flux2Debug.log("Encoded \(images.count) reference images: latents \(referenceLatents.shape), posIds \(referencePositionIds.shape)")
+
+            // Pack output latents to sequence format
+            var packedOutputLatents = LatentUtils.packPatchifiedToSequence(patchifiedLatents)
+            eval(packedOutputLatents)
+            let outputSeqLen = packedOutputLatents.shape[1]
+            Flux2Debug.log("Output sequence length: \(outputSeqLen)")
+
+            // Generate position IDs for output and text
+            let textLength = textEmbeddings.shape[1]
+            let (textIds, outputImageIds, _) = LatentUtils.combinePositionIDs(
+                textLength: textLength,
+                height: validHeight,
+                width: validWidth
+            )
+
+            // Concatenate reference latents to output latents for transformer input
+            // [1, output_seq, 128] + [1, ref_seq, 128] -> [1, total_seq, 128]
+            let combinedLatents = concatenated([packedOutputLatents, referenceLatents], axis: 1)
+            Flux2Debug.log("Combined latents (output + refs): \(combinedLatents.shape)")
+            _ = combinedLatents  // Used for documentation
+
+            // Concatenate position IDs: output IDs + reference IDs
+            // Output IDs are [output_seq, 4], reference IDs are [ref_seq, 4]
+            let combinedImageIds = concatenated([outputImageIds, referencePositionIds], axis: 0)
+            Flux2Debug.log("Combined image IDs: \(combinedImageIds.shape)")
+
+            // Setup scheduler for FULL denoising (no timestep skip in Flux.2 I2I)
+            scheduler.setTimesteps(numInferenceSteps: steps, imageSeqLen: outputSeqLen, strength: 1.0)
+
+            let effectiveSteps = scheduler.sigmas.count - 1
+            Flux2Debug.log("Starting I2I denoising loop (\(effectiveSteps) steps)...")
+
+            let guidanceTensor = MLXArray([guidance])
+
+            profiler.start("6. Denoising Loop")
+
+            for stepIdx in 0..<(scheduler.sigmas.count - 1) {
+                let stepStart = Date()
+
+                let sigma = scheduler.sigmas[stepIdx]
+                let t = MLXArray([sigma])
+
+                // Concatenate current output latents with reference latents for this step
+                let inputLatents = concatenated([packedOutputLatents, referenceLatents], axis: 1)
+
+                // Run transformer with combined latents
+                let noisePred = transformer!.callAsFunction(
+                    hiddenStates: inputLatents,
+                    encoderHiddenStates: textEmbeddings,
+                    timestep: t,
+                    guidance: guidanceTensor,
+                    imgIds: combinedImageIds,
+                    txtIds: textIds
+                )
+
+                // Extract only the OUTPUT portion of the noise prediction
+                // noisePred shape is [1, total_seq, 128], we want first outputSeqLen
+                let outputNoisePred = noisePred[0..., 0..<outputSeqLen, 0...]
+
+                // Scheduler step on OUTPUT latents only
+                packedOutputLatents = scheduler.step(
+                    modelOutput: outputNoisePred,
+                    timestep: sigma,
+                    sample: packedOutputLatents
+                )
+                eval(packedOutputLatents)
+
+                let stepDuration = Date().timeIntervalSince(stepStart)
+                profiler.recordStep(duration: stepDuration)
+
+                onProgress?(stepIdx + 1, effectiveSteps)
+                Flux2Debug.verbose("Step \(stepIdx + 1)/\(effectiveSteps)")
+
+                // Checkpoint
+                if let interval = checkpointInterval,
+                   let checkpointCallback = onCheckpoint,
+                   (stepIdx + 1) % interval == 0 {
+                    do {
+                        var checkpointPatchified = LatentUtils.unpackSequenceToPatchified(
+                            packedOutputLatents,
+                            height: validHeight,
+                            width: validWidth
+                        )
+                        checkpointPatchified = LatentUtils.denormalizeLatentsWithBatchNorm(
+                            checkpointPatchified,
+                            runningMean: vae!.batchNormRunningMean,
+                            runningVar: vae!.batchNormRunningVar
+                        )
+                        let checkpointLatents = LatentUtils.unpatchifyLatents(checkpointPatchified)
+                        eval(checkpointLatents)
+
+                        let checkpointDecoded = vae!.decode(checkpointLatents)
+                        eval(checkpointDecoded)
+
+                        if let checkpointImage = postprocessVAEOutput(checkpointDecoded) {
+                            checkpointCallback(stepIdx + 1, checkpointImage)
+                        }
+                    } catch {
+                        Flux2Debug.log("Checkpoint error at step \(stepIdx + 1): \(error)")
+                    }
+                }
+
+                if stepIdx % 10 == 0 {
+                    memoryManager.clearCache()
+                }
+            }
+
+            profiler.end("6. Denoising Loop")
+
+            // Decode final OUTPUT latents
+            profiler.start("7. VAE Decode")
+            var finalPatchified = LatentUtils.unpackSequenceToPatchified(
+                packedOutputLatents,
+                height: validHeight,
+                width: validWidth
+            )
+            finalPatchified = LatentUtils.denormalizeLatentsWithBatchNorm(
+                finalPatchified,
                 runningMean: vae!.batchNormRunningMean,
                 runningVar: vae!.batchNormRunningVar
             )
-            eval(patchifiedLatents)
+            let finalLatents = LatentUtils.unpatchifyLatents(finalPatchified)
+            eval(finalLatents)
+
+            let decoded = vae!.decode(finalLatents)
+            eval(decoded)
+            profiler.end("7. VAE Decode")
+
+            profiler.start("8. Post-processing")
+            guard let image = postprocessVAEOutput(decoded) else {
+                throw Flux2Error.generationFailed("Failed to convert VAE output to image")
+            }
+            profiler.end("8. Post-processing")
+
+            if profiler.isEnabled {
+                print(profiler.generateReport())
+            }
+
+            return image
         }
+
+        // === TEXT-TO-IMAGE PATH (I2I returns earlier) ===
 
         // Pack patchified latents to sequence format for transformer [B, seq_len, 128]
         var packedLatents = LatentUtils.packPatchifiedToSequence(patchifiedLatents)
         eval(packedLatents)
 
-        Flux2Debug.log("Packed latents shape: \(packedLatents.shape)")
-
-        // Generate position IDs
+        // Generate position IDs for latents and text
         let textLength = textEmbeddings.shape[1]
         let (textIds, imageIds, _) = LatentUtils.combinePositionIDs(
             textLength: textLength,
@@ -421,10 +621,11 @@ public class Flux2Pipeline: @unchecked Sendable {
         let imageSeqLen = packedLatents.shape[1]
         Flux2Debug.log("Image sequence length: \(imageSeqLen)")
 
-        // Setup scheduler with image sequence length for proper mu calculation
-        scheduler.setTimesteps(numInferenceSteps: steps, imageSeqLen: imageSeqLen)
+        // Setup scheduler (T2I always uses strength 1.0)
+        scheduler.setTimesteps(numInferenceSteps: steps, imageSeqLen: imageSeqLen, strength: 1.0)
 
-        Flux2Debug.log("Starting denoising loop...")
+        let effectiveSteps = scheduler.sigmas.count - 1
+        Flux2Debug.log("Starting denoising loop (\(effectiveSteps) steps)...")
 
         // OPTIMIZATION: Create guidance tensor ONCE before the loop
         let guidanceTensor = MLXArray([guidance])
@@ -436,7 +637,6 @@ public class Flux2Pipeline: @unchecked Sendable {
             let stepStart = Date()
 
             let sigma = scheduler.sigmas[stepIdx]
-            // Create timestep tensor (sigma changes each step)
             let t = MLXArray([sigma])
 
             // Run transformer
@@ -449,7 +649,7 @@ public class Flux2Pipeline: @unchecked Sendable {
                 txtIds: textIds
             )
 
-            // Scheduler step (uses sigma internally via stepIndex)
+            // Scheduler step
             packedLatents = scheduler.step(
                 modelOutput: noisePred,
                 timestep: sigma,
@@ -463,10 +663,10 @@ public class Flux2Pipeline: @unchecked Sendable {
             let stepDuration = Date().timeIntervalSince(stepStart)
             profiler.recordStep(duration: stepDuration)
 
-            // Report progress
-            onProgress?(stepIdx + 1, steps)
+            // Report progress (using effective steps for I2I)
+            onProgress?(stepIdx + 1, effectiveSteps)
 
-            Flux2Debug.verbose("Step \(stepIdx + 1)/\(steps)")
+            Flux2Debug.verbose("Step \(stepIdx + 1)/\(effectiveSteps)")
 
             // Generate checkpoint image if requested
             if let interval = checkpointInterval,
@@ -564,42 +764,176 @@ public class Flux2Pipeline: @unchecked Sendable {
 
     // MARK: - Private Methods
 
-    /// Encode reference images for image-to-image
+    /// Encode reference images for image-to-image generation (Flux.2 conditioning mode)
+    ///
+    /// Following the reference Flux.2 diffusers implementation:
+    /// 1. Each image is encoded SEPARATELY through VAE
+    /// 2. Each image gets a UNIQUE T-coordinate (T=10, T=20, T=30, etc.)
+    /// 3. Latents are concatenated AFTER encoding
+    ///
+    /// This preserves semantic information:
+    /// - The transformer can distinguish between different reference images
+    /// - Each reference image has its own position in the "time" dimension
+    /// - Images are resized to max 512² pixels each for memory efficiency
+    ///
+    /// - Parameters:
+    ///   - images: Reference images (1-10 supported)
+    ///   - height: Target output height
+    ///   - width: Target output width
+    /// - Returns: Tuple of (latents [1, seq_len, 128], position IDs [seq_len, 4])
     private func encodeReferenceImages(
         _ images: [CGImage],
         height: Int,
         width: Int
-    ) throws -> MLXArray {
+    ) throws -> (latents: MLXArray, positionIds: MLXArray) {
         guard let vae = vae else {
             throw Flux2Error.modelNotLoaded("VAE")
         }
 
-        var allLatents: [MLXArray] = []
-
-        for image in images {
-            // Preprocess image
-            let processed = preprocessImageForVAE(image, targetHeight: height, targetWidth: width)
-
-            // Encode with VAE
-            let latent = vae.encode(processed)
-            allLatents.append(latent)
+        guard !images.isEmpty else {
+            throw Flux2Error.invalidConfiguration("No reference images provided")
         }
 
-        // If multiple images, concatenate or average
-        if allLatents.count == 1 {
-            return allLatents[0]
-        } else {
-            // Stack and average for multi-image conditioning
-            let stackedLatents = stacked(allLatents)
-            return mean(stackedLatents, axis: 0, keepDims: true)
+        Flux2Debug.log("Encoding \(images.count) reference images separately with unique T-coordinates...")
+
+        // === STEP 1: Process each image separately ===
+        // Max area per image - matches diffusers pipeline_flux2.py line 892-893
+        // Reference uses 1024² for conditioning images (not 768² which is for upsampling)
+        let maxImageArea = 1024 * 1024  // ~4096 tokens per image
+        let multipleOf = 32  // vae_scale_factor * 2
+
+        var allPackedLatents: [MLXArray] = []
+        var latentHeights: [Int] = []
+        var latentWidths: [Int] = []
+
+        for (index, image) in images.enumerated() {
+            Flux2Debug.log("Processing reference image \(index + 1)/\(images.count): \(image.width)x\(image.height)")
+
+            // Calculate target dimensions for this image
+            var targetWidth = image.width
+            var targetHeight = image.height
+            let pixelCount = targetWidth * targetHeight
+
+            if pixelCount > maxImageArea {
+                let scale = sqrt(Double(maxImageArea) / Double(pixelCount))
+                targetWidth = Int(Double(targetWidth) * scale)
+                targetHeight = Int(Double(targetHeight) * scale)
+            }
+
+            // Make dimensions multiples of 32
+            targetWidth = (targetWidth / multipleOf) * multipleOf
+            targetHeight = (targetHeight / multipleOf) * multipleOf
+
+            // Ensure minimum size
+            targetWidth = max(targetWidth, multipleOf)
+            targetHeight = max(targetHeight, multipleOf)
+
+            Flux2Debug.log("  -> Resized to \(targetWidth)x\(targetHeight)")
+
+            // Preprocess and encode
+            let processed = preprocessImageForVAE(image, targetHeight: targetHeight, targetWidth: targetWidth)
+
+            // Encode with VAE -> [1, 32, H/8, W/8]
+            let rawLatents = vae.encode(processed)
+
+            // Patchify: [1, 32, H/8, W/8] -> [1, 128, H/16, W/16]
+            var patchified = LatentUtils.packLatentsToPatchified(rawLatents)
+
+            // Normalize with BatchNorm (critical for Flux.2)
+            patchified = LatentUtils.normalizeLatentsWithBatchNorm(
+                patchified,
+                runningMean: vae.batchNormRunningMean,
+                runningVar: vae.batchNormRunningVar
+            )
+            eval(patchified)
+
+            // Pack to sequence: [1, 128, H/16, W/16] -> [1, seq_len, 128]
+            let packedLatents = LatentUtils.packPatchifiedToSequence(patchified)
+
+            // Remove batch dimension for concatenation: [1, seq_len, 128] -> [seq_len, 128]
+            let squeezed = packedLatents.squeezed(axis: 0)
+            allPackedLatents.append(squeezed)
+
+            // Track dimensions for position IDs
+            let patchifiedH = targetHeight / 16
+            let patchifiedW = targetWidth / 16
+            latentHeights.append(patchifiedH)
+            latentWidths.append(patchifiedW)
+
+            let seqLen = squeezed.shape[0]
+            Flux2Debug.log("  -> Encoded to \(seqLen) tokens (T-coordinate will be \(10 + 10 * index))")
         }
+
+        // === STEP 2: Concatenate all latents ===
+        // Stack along sequence dimension: [seq1, 128] + [seq2, 128] + ... -> [total_seq, 128]
+        let concatenatedLatents = concatenated(allPackedLatents, axis: 0)
+
+        // Add batch dimension back: [total_seq, 128] -> [1, total_seq, 128]
+        let finalLatents = concatenatedLatents.expandedDimensions(axis: 0)
+
+        let totalSeqLen = finalLatents.shape[1]
+        Flux2Debug.log("Combined reference latents: \(finalLatents.shape) (total \(totalSeqLen) tokens)")
+
+        // === STEP 3: Generate position IDs with unique T-coordinates per image ===
+        let positionIds = LatentUtils.generateReferenceImagePositionIDs(
+            latentHeights: latentHeights,
+            latentWidths: latentWidths,
+            scale: 10
+        )
+
+        Flux2Debug.log("Position IDs generated: \(positionIds.shape)")
+        Flux2Debug.log("Reference encoding complete: \(images.count) images with unique T-coordinates")
+
+        return (latents: finalLatents, positionIds: positionIds)
     }
 
     /// Preprocess image for VAE encoding
+    /// Resizes image to target dimensions using high-quality CoreGraphics interpolation
     private func preprocessImageForVAE(_ image: CGImage, targetHeight: Int, targetWidth: Int) -> MLXArray {
-        // Convert CGImage to MLXArray
-        let width = image.width
-        let height = image.height
+        let sourceWidth = image.width
+        let sourceHeight = image.height
+
+        // Resize image using CoreGraphics if needed
+        let resizedImage: CGImage
+        if sourceWidth != targetWidth || sourceHeight != targetHeight {
+            Flux2Debug.log("Resizing image from \(sourceWidth)x\(sourceHeight) to \(targetWidth)x\(targetHeight)")
+
+            let bytesPerPixel = 4
+            let bytesPerRow = bytesPerPixel * targetWidth
+            var pixelData = [UInt8](repeating: 0, count: targetHeight * bytesPerRow)
+
+            guard let context = CGContext(
+                data: &pixelData,
+                width: targetWidth,
+                height: targetHeight,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else {
+                Flux2Debug.log("Failed to create resize context")
+                return MLXRandom.normal([1, 3, targetHeight, targetWidth])
+            }
+
+            // High quality interpolation
+            context.interpolationQuality = .high
+
+            // Draw the image scaled to fit the target dimensions
+            context.draw(image, in: CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight))
+
+            guard let result = context.makeImage() else {
+                Flux2Debug.log("Failed to create resized image")
+                return MLXRandom.normal([1, 3, targetHeight, targetWidth])
+            }
+
+            resizedImage = result
+        } else {
+            resizedImage = image
+        }
+
+        // Now convert to MLXArray
+        let width = targetWidth
+        let height = targetHeight
         let bytesPerPixel = 4
         let bytesPerRow = bytesPerPixel * width
 
@@ -617,7 +951,7 @@ public class Flux2Pipeline: @unchecked Sendable {
             return MLXRandom.normal([1, 3, targetHeight, targetWidth])
         }
 
-        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        context.draw(resizedImage, in: CGRect(x: 0, y: 0, width: width, height: height))
 
         // Convert to float array and normalize to [-1, 1]
         var floatData = [Float](repeating: 0, count: height * width * 3)
@@ -634,16 +968,7 @@ public class Flux2Pipeline: @unchecked Sendable {
         }
 
         // Create MLXArray [1, 3, H, W]
-        let tensor = MLXArray(floatData).reshaped([1, 3, height, width])
-
-        // Resize if needed (simple nearest neighbor for now)
-        if height != targetHeight || width != targetWidth {
-            // For proper resize, would use bilinear interpolation
-            // For now, return at original size
-            return tensor
-        }
-
-        return tensor
+        return MLXArray(floatData).reshaped([1, 3, height, width])
     }
 
     /// Convert VAE output to CGImage
