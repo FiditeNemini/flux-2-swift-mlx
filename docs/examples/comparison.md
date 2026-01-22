@@ -74,6 +74,39 @@ A side-by-side comparison of all Flux.2 model variants.
 
 ---
 
+## Visual Quality Comparison
+
+**Prompt:** `"a superhero flying over a datacenter"`
+
+All images generated at 1024×1024 with seed=42 for direct comparison.
+
+### Without Prompt Upsampling
+
+| Klein 4B (bf16) | Klein 4B (qint8) | Klein 9B (bf16) | Dev (qint8) |
+|-----------------|------------------|-----------------|-------------|
+| ![Klein 4B bf16](comparison_quality/klein4b_bf16.png) | ![Klein 4B qint8](comparison_quality/klein4b_qint8.png) | ![Klein 9B bf16](comparison_quality/klein9b_bf16.png) | ![Dev qint8](comparison_quality/dev_qint8.png) |
+| **25.3s** | **27.2s** | **53.9s** | **30m 15s** |
+
+### With Prompt Upsampling
+
+| Klein 4B (bf16) | Klein 4B (qint8) | Klein 9B (bf16) | Dev (qint8) |
+|-----------------|------------------|-----------------|-------------|
+| ![Klein 4B bf16 upsampled](comparison_quality/klein4b_bf16_upsampled.png) | ![Klein 4B qint8 upsampled](comparison_quality/klein4b_qint8_upsampled.png) | ![Klein 9B bf16 upsampled](comparison_quality/klein9b_bf16_upsampled.png) | ![Dev qint8 upsampled](comparison_quality/dev_qint8_upsampled.png) |
+| **29.3s** | **31.0s** | **63.5s** | **31m 49s** |
+
+### Timing Summary
+
+| Model | Without Upsampling | With Upsampling | Overhead |
+|-------|-------------------|-----------------|----------|
+| Klein 4B (bf16) | 25.3s | 29.3s | +4.0s |
+| Klein 4B (qint8) | 27.2s | 31.0s | +3.8s |
+| Klein 9B (bf16) | 53.9s | 63.5s | +9.6s |
+| Dev (qint8) | 30m 15s | 31m 49s | +1m 34s |
+
+> **Note:** Prompt upsampling adds overhead for VLM inference but typically improves detail and prompt adherence.
+
+---
+
 ## Quantization Options
 
 ### Flux.2 Dev
@@ -167,4 +200,5 @@ flux2 t2i "a beaver building a dam" \
 
 - [Flux.2 Dev Examples](flux2-dev/README.md)
 - [Flux.2 Klein 4B Examples](flux2-klein-4b/README.md)
+- [Flux.2 Klein 9B Examples](flux2-klein-9b/README.md)
 - [CLI Documentation](../CLI.md)
