@@ -153,6 +153,40 @@ flux2 i2i "turn to h4rd8are" \
 
 ---
 
+### Multi-Angles View (Dev)
+
+**LoRA:** [lovis93/Flux-2-Multi-Angles-LoRA-v2](https://huggingface.co/lovis93/Flux-2-Multi-Angles-LoRA-v2)
+
+Generates images from different viewpoints using the `<sks>` trigger with view parameters.
+
+| Input | Output |
+|-------|--------|
+| ![Input](examples/lora_multi_angles/input.png) | ![Output](examples/lora_multi_angles/output.png) |
+
+**Command:**
+```bash
+flux2 i2i "<sks> back view high-angle shot medium shot" \
+  --images input.png \
+  --lora flux-multi-angles-v2-72poses-diffusers.safetensors \
+  --lora-scale 1.0 \
+  --model dev \
+  --strength 0.8 \
+  -s 28 \
+  -o output.png
+```
+
+**Trigger format:** `<sks> [view] [elevation] shot [distance]`
+- **Views:** front, back, left, right, 3/4 front left, 3/4 front right, 3/4 back left, 3/4 back right
+- **Elevations:** low-angle, eye-level, high-angle, overhead
+- **Distances:** close-up, medium, full body
+
+**Notes:**
+- Requires `<sks>` trigger prefix
+- Dev LoRA (160 layers, rank 16, ~318 MB)
+- Supports 72 different pose combinations
+
+---
+
 ## Finding LoRAs
 
 ### Recommended Sources
@@ -173,6 +207,12 @@ flux2 i2i "turn to h4rd8are" \
 | LoRA | Purpose | Prompt | Scale |
 |------|---------|--------|-------|
 | [h4rd8are](https://huggingface.co/siraxe/h4rd8are_klein9b) | Metallic/tech style | "turn to h4rd8are" | 0.6-1.0 |
+
+### Known Dev LoRAs
+
+| LoRA | Purpose | Prompt | Scale |
+|------|---------|--------|-------|
+| [Multi-Angles](https://huggingface.co/lovis93/Flux-2-Multi-Angles-LoRA-v2) | 72 viewpoint poses | "`<sks>` [view] [elevation] shot [distance]" | 1.0 |
 
 ---
 
