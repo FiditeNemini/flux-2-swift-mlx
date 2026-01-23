@@ -185,6 +185,34 @@ flux2 t2i "a beaver building a dam" \
 
 ---
 
+## Image-to-Image Support
+
+All models support I2I with VAE-encoded reference images and unique T-coordinate position IDs.
+
+### Reference Image Limits
+
+| Model | VRAM | Max Images | Max Tokens |
+|-------|------|------------|------------|
+| Klein 4B | ~8GB | 2-3 | ~16k |
+| Klein 9B | ~20GB | 3-5 | ~25k |
+| Dev | ~60GB | 5-10 | ~45k |
+
+Each 1024×1024 reference image consumes ~4,096 tokens.
+
+### VLM Capabilities
+
+| Feature | Dev | Klein 4B/9B |
+|---------|-----|-------------|
+| Text Encoder | Mistral VLM | Qwen3 LLM |
+| Native Vision | ✅ Yes | ❌ No |
+| T2I Upsampling | Vision-aware | Text-only |
+| I2I Upsampling | **Analyzes refs** ✅ | **Analyzes refs** ✅ |
+| --interpret | **VLM analysis** ✅ | **VLM analysis** ✅ |
+
+> **Note:** For Klein, when using `--upsample-prompt` with I2I or `--interpret`, the pipeline temporarily loads Mistral VLM to analyze images, then unloads it and uses Qwen3 for text encoding. This provides the same vision capabilities as Dev.
+
+---
+
 ## Hardware Requirements
 
 | Model | Minimum RAM | Recommended RAM |

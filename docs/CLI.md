@@ -41,7 +41,7 @@ flux2 t2i <prompt> [options]
 | `--text-quant` | | `8bit` | Text encoder quantization: `bf16`, `8bit`, `6bit`, `4bit` |
 | `--transformer-quant` | | `qint8` | Transformer quantization: `bf16`, `qint8`, `qint4` |
 | `--upsample-prompt` | | | Enhance prompt with visual details before encoding |
-| `--interpret` | | | Image to analyze with VLM and inject into prompt |
+| `--interpret` | | | Image to analyze with VLM and inject into prompt (all models) |
 | `--checkpoint` | | | Save intermediate images every N steps |
 | `--debug` | | | Enable verbose debug output |
 | `--profile` | | | Enable performance profiling |
@@ -314,6 +314,50 @@ flux2 i2i "create a scene combining these elements" \
 ```
 
 > **Note:** Multi-image mode ignores the `--strength` parameter and always performs full denoising. Reference images provide visual context that guides the transformer's attention during generation.
+
+### I2I with Klein Models
+
+Klein 4B and 9B support Image-to-Image generation with the same VAE-based encoding as Dev.
+
+**Klein I2I example:**
+```bash
+flux2 i2i "transform into watercolor style" \
+  --model klein-4b \
+  --images photo.jpg \
+  --strength 0.7 \
+  -o watercolor.png
+```
+
+**Multi-image with Klein:**
+```bash
+flux2 i2i "a cat wearing this hat" \
+  --model klein-9b \
+  --images cat.jpg \
+  --images hat.jpg \
+  --steps 4 \
+  -o cat_hat.png
+```
+
+#### Token Limits per Model
+
+Reference images consume tokens in the transformer's attention. Here are practical limits:
+
+| Model | VRAM | Recommended Max Images | Max Tokens |
+|-------|------|------------------------|------------|
+| Klein 4B | ~8GB | 2-3 images | ~16k |
+| Klein 9B | ~20GB | 3-5 images | ~25k |
+| Dev | ~60GB | 5-10 images | ~45k |
+
+**Token calculation:** Each 1024×1024 reference image = ~4,096 tokens
+
+#### Upsampling Behavior
+
+| Model | T2I Upsampling | I2I Upsampling |
+|-------|----------------|----------------|
+| **Dev** | Mistral VLM (text) | Mistral VLM (sees images) ✅ |
+| **Klein** | Qwen3 (text only) | **Mistral VLM (sees images)** ✅ |
+
+> **Note:** For Klein I2I with `--upsample-prompt`, the pipeline automatically loads Mistral VLM temporarily to analyze reference images, then unloads it and uses Qwen3 for the final text encoding. This matches the official Flux.2 implementation and provides context-aware upsampling.
 
 ---
 

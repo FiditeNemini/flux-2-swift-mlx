@@ -436,7 +436,49 @@ public class Flux2Pipeline: @unchecked Sendable {
                 profiler.end("1b. VLM Interpretation")
 
             case .klein4B, .klein9B:
-                Flux2Debug.log("Warning: VLM interpretation not available for Klein models, skipping...")
+                // Klein + --interpret: load Mistral VLM temporarily to analyze images
+                Flux2Debug.log("Klein with --interpret: loading Mistral VLM temporarily to analyze images...")
+                profiler.start("1b. VLM Interpretation")
+
+                // Step 1: Unload Qwen3 to free memory for Mistral
+                Flux2Debug.log("Unloading Qwen3 to make room for Mistral VLM...")
+                await MainActor.run { kleinEncoder?.unload() }
+                memoryManager.fullCleanup()
+
+                // Step 2: Load Mistral VLM
+                Flux2Debug.log("Loading Mistral VLM for image interpretation...")
+                let tempMistralForInterpret = Flux2TextEncoder(quantization: quantization.textEncoder)
+                try await tempMistralForInterpret.load()
+
+                // Step 3: VLM interpretation (same logic as Dev)
+                let descriptions = try await tempMistralForInterpret.describeImagePathsForPrompt(interpretPaths, context: prompt)
+
+                if !descriptions.isEmpty {
+                    let imageContext = descriptions.enumerated().map { (idx, desc) in
+                        "Interpret image \(idx + 1): \(desc)"
+                    }.joined(separator: "\n")
+
+                    enrichedPrompt = """
+                    \(imageContext)
+
+                    User request: \(prompt)
+                    """
+
+                    Flux2Debug.log("Prompt enriched with \(descriptions.count) VLM description(s)")
+                    print("[VLM-Interpret] Enriched prompt:\n\(enrichedPrompt)")
+                    fflush(stdout)
+                }
+
+                // Step 4: Unload Mistral
+                Flux2Debug.log("Unloading Mistral VLM...")
+                await MainActor.run { tempMistralForInterpret.unload() }
+                memoryManager.fullCleanup()
+
+                // Step 5: Reload Qwen3 for text encoding
+                Flux2Debug.log("Reloading Qwen3 for Klein text encoding...")
+                try await kleinEncoder!.load()
+
+                profiler.end("1b. VLM Interpretation")
             }
         }
 
@@ -455,8 +497,40 @@ public class Flux2Pipeline: @unchecked Sendable {
             }
 
         case .klein4B, .klein9B:
-            // Klein uses Qwen3 for text encoding (no VLM support)
-            textEmbeddings = try kleinEncoder!.encode(enrichedPrompt, upsample: upsamplePrompt)
+            // Klein I2I with upsampling: load Mistral VLM temporarily to see reference images
+            // This matches the official flux2 implementation which loads Mistral for Klein I2I upsampling
+            if upsamplePrompt, case .imageToImage(let images, _) = mode {
+                Flux2Debug.log("Klein I2I with upsampling: using Mistral VLM to analyze reference images...")
+
+                // Step 1: Unload Qwen3 (already loaded by loadTextEncoder) to free memory for Mistral
+                Flux2Debug.log("Unloading Qwen3 to make room for Mistral VLM...")
+                await MainActor.run { kleinEncoder?.unload() }
+                memoryManager.fullCleanup()
+
+                // Step 2: Load Mistral VLM for vision-aware upsampling
+                Flux2Debug.log("Loading Mistral VLM for image analysis...")
+                let tempMistralEncoder = Flux2TextEncoder(quantization: quantization.textEncoder)
+                try await tempMistralEncoder.load()
+
+                // Step 3: Upsample prompt with images using Mistral VLM
+                Flux2Debug.log("Upsampling prompt with \(images.count) reference image(s)...")
+                let enhancedPrompt = try await tempMistralEncoder.upsamplePromptWithImages(enrichedPrompt, images: images)
+
+                // Step 4: Unload Mistral to free memory
+                Flux2Debug.log("Unloading Mistral VLM...")
+                await MainActor.run { tempMistralEncoder.unload() }
+                memoryManager.fullCleanup()
+
+                // Step 5: Reload Qwen3 for text encoding
+                Flux2Debug.log("Reloading Qwen3 for Klein text encoding...")
+                try await kleinEncoder!.load()
+
+                // Step 6: Encode with Qwen3 (already upsampled, so upsample=false)
+                textEmbeddings = try kleinEncoder!.encode(enhancedPrompt, upsample: false)
+            } else {
+                // Standard Klein encoding (text-only upsampling if enabled)
+                textEmbeddings = try kleinEncoder!.encode(enrichedPrompt, upsample: upsamplePrompt)
+            }
         }
         eval(textEmbeddings)
         profiler.end("2. Text Encoding")
