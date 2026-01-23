@@ -120,6 +120,7 @@ public class LoRALoader {
             if rank == 0 {
                 rank = loraA.shape[0]
                 Flux2Debug.log("[LoRA] Detected rank: \(rank)")
+                Flux2Debug.log("[LoRA] loraA dtype: \(loraA.dtype), loraB dtype: \(loraB.dtype)")
             }
 
             // Check if this is a combined QKV layer that needs splitting

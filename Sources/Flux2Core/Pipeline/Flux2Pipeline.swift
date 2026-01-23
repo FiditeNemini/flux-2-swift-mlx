@@ -1033,7 +1033,9 @@ public class Flux2Pipeline: @unchecked Sendable {
             let processed = preprocessImageForVAE(image, targetHeight: targetHeight, targetWidth: targetWidth)
 
             // Encode with VAE -> [1, 32, H/8, W/8]
-            let rawLatents = vae.encode(processed)
+            // IMPORTANT: Use samplePosterior=false to get deterministic mean (like diffusers argmax)
+            // This preserves color information better than sampling with noise
+            let rawLatents = vae.encode(processed, samplePosterior: false)
 
             // Patchify: [1, 32, H/8, W/8] -> [1, 128, H/16, W/16]
             var patchified = LatentUtils.packLatentsToPatchified(rawLatents)

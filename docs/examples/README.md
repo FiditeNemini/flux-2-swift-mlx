@@ -88,6 +88,39 @@ Klein 9B offers better quality than Klein 4B while remaining much faster than De
 
 ---
 
+## LoRA Adapters
+
+LoRA (Low-Rank Adaptation) allows fine-tuning models for specific tasks without modifying the base weights.
+
+### Object Removal LoRA
+
+Using [fal/flux-2-klein-4B-object-remove-lora](https://huggingface.co/fal/flux-2-klein-4B-object-remove-lora) to remove highlighted objects from images.
+
+| Input | Output |
+|-------|--------|
+| ![Input](lora_object_removal/input.jpg) | ![Output](lora_object_removal/output.png) |
+
+**Command:**
+```bash
+flux2 i2i "Remove the highlighted object from the scene" \
+  --images input.jpg \
+  --lora flux-object-remove-lora.safetensors \
+  --lora-scale 1.1 \
+  --model klein-4b \
+  --transformer-quant bf16 \
+  --strength 0.8 \
+  -s 4 \
+  -o output.png
+```
+
+**Notes:**
+- This LoRA requires the exact prompt: "Remove the highlighted object from the scene"
+- Objects should be highlighted/masked in the input image
+- Recommended scale: 1.1
+- Best results with `--transformer-quant bf16`
+
+---
+
 ## Hardware Used
 
 All examples generated on:

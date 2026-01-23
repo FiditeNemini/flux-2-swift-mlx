@@ -697,6 +697,8 @@ public class Flux2WeightLoader {
 
         Flux2Debug.log("[LoRA] Merging weights into transformer...")
 
+        var dtypeLogged = false
+
         // Iterate through all LoRA pairs
         for layerPath in loraManager.loadedLayerPaths {
             let pairs = loraManager.getLoRAPairs(for: layerPath)
@@ -718,10 +720,21 @@ public class Flux2WeightLoader {
 
             // Apply all LoRA pairs for this layer
             for (scale, loraA, loraB) in pairs {
+                // Log dtypes once for debugging
+                if !dtypeLogged {
+                    Flux2Debug.log("[LoRA] dtypes - original: \(originalWeight.dtype), loraA: \(loraA.dtype), loraB: \(loraB.dtype)")
+                    dtypeLogged = true
+                }
+
                 // Compute LoRA delta: scale * (loraB @ loraA)
                 // loraA: [rank, in_features], loraB: [out_features, rank]
                 // Result: [out_features, in_features]
-                let loraDelta = scale * matmul(loraB, loraA)
+                //
+                // IMPORTANT: Convert LoRA weights to same dtype as original weight
+                // to avoid dtype mismatches that can cause color issues
+                let loraAConverted = loraA.asType(originalWeight.dtype)
+                let loraBConverted = loraB.asType(originalWeight.dtype)
+                let loraDelta = scale * matmul(loraBConverted, loraAConverted)
 
                 // Add to weight
                 mergedWeight = mergedWeight + loraDelta
