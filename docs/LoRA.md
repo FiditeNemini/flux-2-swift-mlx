@@ -124,6 +124,35 @@ flux2 i2i "2x2 sprite sheet" \
 
 ---
 
+### Hardware Style (Klein 9B)
+
+**LoRA:** [siraxe/h4rd8are_klein9b](https://huggingface.co/siraxe/h4rd8are_klein9b)
+
+Transforms objects into a metallic/industrial hardware aesthetic.
+
+| Input | Output |
+|-------|--------|
+| ![Input](examples/lora_h4rd8are/input.png) | ![Output](examples/lora_h4rd8are/output.png) |
+
+**Command:**
+```bash
+flux2 i2i "turn to h4rd8are" \
+  --images input.png \
+  --lora turn_to_h4rd8are_klein9b.safetensors \
+  --lora-scale 1.0 \
+  --model klein-9b \
+  --strength 0.8 \
+  -s 4 \
+  -o output.png
+```
+
+**Notes:**
+- Requires prompt: "turn to h4rd8are"
+- Recommended scale: 0.6-1.0
+- Klein 9B LoRA (144 layers, rank 32, ~332 MB)
+
+---
+
 ## Finding LoRAs
 
 ### Recommended Sources
@@ -138,6 +167,12 @@ flux2 i2i "2x2 sprite sheet" \
 |------|---------|--------|-------|
 | [object-remove](https://huggingface.co/fal/flux-2-klein-4B-object-remove-lora) | Remove objects | "Remove the highlighted object from the scene" | 1.1 |
 | [spritesheet](https://huggingface.co/fal/flux-2-klein-4b-spritesheet-lora) | 2×2 sprite grid | "2x2 sprite sheet" | 1.1 |
+
+### Known Klein 9B LoRAs
+
+| LoRA | Purpose | Prompt | Scale |
+|------|---------|--------|-------|
+| [h4rd8are](https://huggingface.co/siraxe/h4rd8are_klein9b) | Metallic/tech style | "turn to h4rd8are" | 0.6-1.0 |
 
 ---
 
