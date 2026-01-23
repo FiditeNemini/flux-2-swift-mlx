@@ -42,13 +42,13 @@ A side-by-side comparison of all Flux.2 model variants.
 
 ## Performance Comparison
 
-| Metric | Flux.2 Dev | Klein 4B (bf16) | Klein 9B (bf16) |
-|--------|------------|-----------------|-----------------|
-| **Total Time (1024x1024)** | ~35 min | ~26s | ~56s |
-| **Steps** | 28-50 | 4 | 4 |
-| **Per-Step Time** | ~1 min | ~5.0s | ~12.1s |
-| **Memory Usage** | ~60GB | ~5.6GB | ~20GB |
-| **Speedup vs Dev** | 1x | **~80x** | **~38x** |
+| Metric | Flux.2 Dev (qint8) | Flux.2 Dev (bf16) | Klein 4B (bf16) | Klein 9B (bf16) |
+|--------|-------------------|-------------------|-----------------|-----------------|
+| **Total Time (1024x1024)** | ~30 min | ~30 min | ~26s | ~56s |
+| **Steps** | 28-50 | 28-50 | 4 | 4 |
+| **Per-Step Time** | ~1 min | ~1 min | ~5.0s | ~12.1s |
+| **Memory Usage** | ~60GB | ~90GB | ~5.6GB | ~20GB |
+| **Speedup vs Dev** | 1x | 1x | **~70x** | **~32x** |
 
 ---
 
@@ -82,17 +82,17 @@ All images generated at 1024×1024 with seed=42 for direct comparison.
 
 ### Without Prompt Upsampling
 
-| Klein 4B (bf16) | Klein 4B (qint8) | Klein 9B (bf16) | Dev (qint8) |
-|-----------------|------------------|-----------------|-------------|
-| ![Klein 4B bf16](comparison_quality/klein4b_bf16.png) | ![Klein 4B qint8](comparison_quality/klein4b_qint8.png) | ![Klein 9B bf16](comparison_quality/klein9b_bf16.png) | ![Dev qint8](comparison_quality/dev_qint8.png) |
-| **25.3s** | **27.2s** | **53.9s** | **30m 15s** |
+| Klein 4B (bf16) | Klein 4B (qint8) | Klein 9B (bf16) | Dev (qint8) | Dev (bf16) |
+|-----------------|------------------|-----------------|-------------|------------|
+| ![Klein 4B bf16](comparison_quality/klein4b_bf16.png) | ![Klein 4B qint8](comparison_quality/klein4b_qint8.png) | ![Klein 9B bf16](comparison_quality/klein9b_bf16.png) | ![Dev qint8](comparison_quality/dev_qint8.png) | ![Dev bf16](comparison_quality/dev_bf16.png) |
+| **25.3s** | **27.2s** | **53.9s** | **30m 15s** | **29m 47s** |
 
 ### With Prompt Upsampling
 
-| Klein 4B (bf16) | Klein 4B (qint8) | Klein 9B (bf16) | Dev (qint8) |
-|-----------------|------------------|-----------------|-------------|
-| ![Klein 4B bf16 upsampled](comparison_quality/klein4b_bf16_upsampled.png) | ![Klein 4B qint8 upsampled](comparison_quality/klein4b_qint8_upsampled.png) | ![Klein 9B bf16 upsampled](comparison_quality/klein9b_bf16_upsampled.png) | ![Dev qint8 upsampled](comparison_quality/dev_qint8_upsampled.png) |
-| **29.3s** | **31.0s** | **63.5s** | **31m 49s** |
+| Klein 4B (bf16) | Klein 4B (qint8) | Klein 9B (bf16) | Dev (qint8) | Dev (bf16) |
+|-----------------|------------------|-----------------|-------------|------------|
+| ![Klein 4B bf16 upsampled](comparison_quality/klein4b_bf16_upsampled.png) | ![Klein 4B qint8 upsampled](comparison_quality/klein4b_qint8_upsampled.png) | ![Klein 9B bf16 upsampled](comparison_quality/klein9b_bf16_upsampled.png) | ![Dev qint8 upsampled](comparison_quality/dev_qint8_upsampled.png) | ![Dev bf16 upsampled](comparison_quality/dev_bf16_upsampled.png) |
+| **29.3s** | **31.0s** | **63.5s** | **31m 49s** | **26m 39s** |
 
 ### Timing Summary
 
@@ -102,6 +102,7 @@ All images generated at 1024×1024 with seed=42 for direct comparison.
 | Klein 4B (qint8) | 27.2s | 31.0s | +3.8s |
 | Klein 9B (bf16) | 53.9s | 63.5s | +9.6s |
 | Dev (qint8) | 30m 15s | 31m 49s | +1m 34s |
+| Dev (bf16) | 29m 47s | 26m 39s | -3m 8s |
 
 > **Note:** Prompt upsampling adds overhead for VLM inference but typically improves detail and prompt adherence.
 
@@ -216,6 +217,7 @@ Each 1024×1024 reference image consumes ~4,096 tokens.
 
 | Model | Minimum RAM | Recommended RAM |
 |-------|-------------|-----------------|
+| Flux.2 Dev (bf16) | 96GB | 128GB+ |
 | Flux.2 Dev (qint8) | 64GB | 96GB+ |
 | Klein 9B (bf16) | 32GB | 48GB+ |
 | Klein 4B (qint8) | 16GB | 32GB+ |
