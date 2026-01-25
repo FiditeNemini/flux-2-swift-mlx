@@ -1,10 +1,18 @@
 # Flux.2 Swift MLX
 
-> **⚠️ WORK IN PROGRESS**
->
-> This project is under active development. APIs may change, and some features are not yet implemented.
+A native Swift implementation of [Flux.2](https://blackforestlabs.ai/) image generation models, running locally on Apple Silicon Macs using [MLX](https://github.com/ml-explore/mlx-swift).
 
-A native Swift implementation of [Flux.2 Dev](https://blackforestlabs.ai/) image generation model, running locally on Apple Silicon Macs using [MLX](https://github.com/ml-explore/mlx-swift).
+## Downloads
+
+**[📦 Latest Release (v1.0.0)](https://github.com/VincentGourbin/flux-2-swift-mlx/releases/tag/v1.0.0)** — Universal binaries for Apple Silicon and Intel
+
+| Download | Description |
+|----------|-------------|
+| [Flux2App](https://github.com/VincentGourbin/flux-2-swift-mlx/releases/download/v1.0.0/Flux2App-v1.0.0-macOS.zip) | Demo macOS app with T2I, I2I, chat ([guide](docs/Flux2App.md)) |
+| [Flux2CLI](https://github.com/VincentGourbin/flux-2-swift-mlx/releases/download/v1.0.0/Flux2CLI-v1.0.0-macOS.zip) | Image generation CLI ([guide](docs/CLI.md)) |
+| [FluxEncodersCLI](https://github.com/VincentGourbin/flux-2-swift-mlx/releases/download/v1.0.0/FluxEncodersCLI-v1.0.0-macOS.zip) | Text encoders CLI ([guide](docs/TextEncoders.md)) |
+
+> **Note**: On first launch, macOS may block unsigned apps. Right-click → Open to bypass Gatekeeper.
 
 ## Features
 
@@ -45,6 +53,20 @@ A native Swift implementation of [Flux.2 Dev](https://blackforestlabs.ai/) image
 
 ## Installation
 
+### Pre-built Binaries (Recommended)
+
+Download from the [Releases page](https://github.com/VincentGourbin/flux-2-swift-mlx/releases/latest):
+
+```bash
+# CLI
+unzip Flux2CLI-v1.0.0-macOS.zip
+./Flux2CLI t2i "a cat" --model klein-4b
+
+# App
+unzip Flux2App-v1.0.0-macOS.zip
+open Flux2App.app
+```
+
 ### Build from Source
 
 ```bash
@@ -52,12 +74,11 @@ git clone https://github.com/VincentGourbin/flux-2-swift-mlx.git
 cd flux-2-swift-mlx
 ```
 
-**Important**: Build with Xcode, not `swift build`:
+Build with Xcode (not `swift build`):
 
 1. Open the project in Xcode
-2. Select the `Flux2CLI` scheme
-3. Build with `Cmd+B`
-4. Find the binary in Products folder
+2. Select `Flux2CLI` or `Flux2App` scheme
+3. Build with `Cmd+B` (or `Cmd+R` to run)
 
 ### Download Models
 
