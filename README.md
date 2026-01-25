@@ -19,6 +19,7 @@ A native Swift implementation of [Flux.2 Dev](https://blackforestlabs.ai/) image
 - **Prompt Upsampling**: Enhance prompts with Mistral/Qwen3 before generation
 - **LoRA Support**: Load and apply LoRA adapters for style transfer
 - **CLI Tool**: Full-featured command-line interface (`Flux2CLI`)
+- **macOS App**: Demo SwiftUI application (`Flux2App`) with T2I, I2I, and chat
 
 ### Text Encoders (FluxTextEncoders)
 - **Mistral Small 3.2 (24B)**: Text encoder for FLUX.2 dev/pro
@@ -28,7 +29,6 @@ A native Swift implementation of [Flux.2 Dev](https://blackforestlabs.ai/) image
 - **Vision Analysis**: Image understanding via Pixtral vision encoder (VLM)
 - **FLUX.2 Embeddings**: Extract embeddings compatible with FLUX.2 image generation
 - **CLI Tool**: Complete command-line interface (`FluxEncodersCLI`)
-- **macOS App**: Full-featured SwiftUI application (`FluxEncodersApp`)
 
 ## Requirements
 
@@ -164,14 +164,15 @@ See [GitHub Issues](https://github.com/VincentGourbin/flux-2-swift-mlx/issues) f
 - [x] Flux.2 Klein 4B (4B, ~26s, Apache 2.0)
 - [x] Flux.2 Klein 9B (9B, ~62s, non-commercial)
 - [x] LoRA adapter support
+- [x] Demo SwiftUI application (`Flux2App`)
 - [ ] Performance optimizations
-- [ ] Demo SwiftUI application
 
 ## Documentation
 
 - [CLI Documentation](docs/CLI.md) - Command-line interface usage
 - [LoRA Guide](docs/LoRA.md) - LoRA adapter configuration and usage
 - [Text Encoders](docs/TextEncoders.md) - FluxTextEncoders library API and CLI
+- [Flux2App Guide](docs/Flux2App.md) - Demo macOS application
 
 ## Acknowledgments
 
