@@ -340,9 +340,10 @@ struct TrainLoRA: AsyncParsableCommand {
         print()
 
         // Run training
+        // Always pass VAE - even with cacheLatents, we need it for validation image generation
         try await trainer.train(
             transformer: transformer,
-            vae: config.cacheLatents ? nil : vae,
+            vae: vae,
             textEncoder: { prompt in
                 try textEncoder.encode(prompt)
             }
