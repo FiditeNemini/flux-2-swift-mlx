@@ -6,6 +6,8 @@ import MLX
 import MLXNN
 import MLXOptimizers
 import MLXRandom
+import ImageIO
+import UniformTypeIdentifiers
 
 /// Main trainer class for LoRA fine-tuning
 public final class LoRATrainer: @unchecked Sendable {
@@ -62,7 +64,13 @@ public final class LoRATrainer: @unchecked Sendable {
     /// Cached valueAndGrad function to avoid reconstructing gradient graph per step
     /// Type: (Model, [MLXArray]) -> ([MLXArray], ModuleParameters)
     private var cachedLossAndGrad: ((Flux2Transformer2DModel, [MLXArray]) -> ([MLXArray], ModuleParameters))?
-    
+
+    /// VAE reference for validation image generation (kept even when latents are cached)
+    private var validationVAE: AutoencoderKLFlux2?
+
+    /// Text encoder reference for validation image generation
+    private var validationTextEncoder: ((String) async throws -> MLXArray)?
+
     // MARK: - Initialization
     
     /// Initialize LoRA trainer
@@ -192,6 +200,10 @@ public final class LoRATrainer: @unchecked Sendable {
         isRunning = true
         shouldStop = false
 
+        // Store references for validation image generation
+        self.validationVAE = vae
+        self.validationTextEncoder = textEncoder
+
         // Inject LoRA directly into transformer (replaces Linear with LoRAInjectedLinear)
         // This is the correct approach - LoRA becomes part of the forward pass
         transformer.applyLoRA(
@@ -302,19 +314,55 @@ public final class LoRATrainer: @unchecked Sendable {
                         Flux2Debug.log(state.progressSummary)
                     }
                     
-                    // Checkpointing
-                    // TODO: Implement checkpoint saving with LoRATrainingModel
+                    // Checkpointing - save intermediate LoRA weights
                     if config.saveEveryNSteps > 0 &&
                        state.globalStep % config.saveEveryNSteps == 0 {
-                        // For now, skip intermediate checkpoints
+                        let outputDir = config.outputPath.deletingLastPathComponent()
+                        let checkpointName = "checkpoint_\(state.globalStep).safetensors"
+                        let checkpointURL = outputDir.appendingPathComponent(checkpointName)
+
+                        do {
+                            try saveLoRAWeights(from: transformer, to: checkpointURL)
+                            eventHandler?.handleEvent(.checkpointSaved(
+                                path: checkpointURL.path,
+                                step: state.globalStep
+                            ))
+
+                            // Clean up old checkpoints if keepOnlyLastNCheckpoints > 0
+                            if config.keepOnlyLastNCheckpoints > 0 {
+                                cleanupOldCheckpoints(
+                                    in: outputDir,
+                                    keepLast: config.keepOnlyLastNCheckpoints
+                                )
+                            }
+                        } catch {
+                            Flux2Debug.log("[Checkpoint] Failed to save: \(error.localizedDescription)")
+                        }
+
                         state.lastCheckpointTime = Date()
                     }
                     
-                    // Validation
+                    // Validation image generation
                     if config.validationEveryNSteps > 0 &&
                        config.validationPrompt != nil &&
                        state.globalStep % config.validationEveryNSteps == 0 {
-                        // TODO: Generate validation image
+                        // Generate validation image with current LoRA weights
+                        if let prompt = config.validationPrompt {
+                            do {
+                                if let imageURL = try await generateValidationImage(
+                                    transformer: transformer,
+                                    prompt: prompt,
+                                    step: state.globalStep
+                                ) {
+                                    eventHandler?.handleEvent(.validationImageGenerated(
+                                        path: imageURL.path,
+                                        step: state.globalStep
+                                    ))
+                                }
+                            } catch {
+                                Flux2Debug.log("[Validation] Failed to generate image: \(error.localizedDescription)")
+                            }
+                        }
                         state.lastValidationTime = Date()
                     }
                     
@@ -889,6 +937,183 @@ public final class LoRATrainer: @unchecked Sendable {
         try data.write(to: metadataPath)
 
         Flux2Debug.log("[LoRATrainer] Saved LoRA weights to \(url.path) (\(weights.count) tensors)")
+    }
+
+    // MARK: - Validation Image Generation
+
+    /// Generate a validation image using the current LoRA weights
+    /// - Parameters:
+    ///   - transformer: Transformer with LoRA injected
+    ///   - prompt: Validation prompt
+    ///   - step: Current training step (for filename)
+    /// - Returns: URL of saved image, or nil if generation failed
+    private func generateValidationImage(
+        transformer: Flux2Transformer2DModel,
+        prompt: String,
+        step: Int
+    ) async throws -> URL? {
+        guard let vae = validationVAE,
+              let textEncoder = validationTextEncoder else {
+            Flux2Debug.log("[Validation] Skipping - VAE or text encoder not available")
+            return nil
+        }
+
+        let size = 512  // Fixed 512x512 for validation previews
+        let seed = config.validationSeed ?? 42
+        let validationSteps = 15  // Quick preview, 15 steps is enough
+
+        Flux2Debug.log("[Validation] Generating preview image for step \(step)...")
+
+        // Set seed for reproducibility
+        MLXRandom.seed(seed)
+
+        // 1. Encode validation prompt
+        let textEmbeddings = try await textEncoder(prompt)
+        eval(textEmbeddings)
+
+        // 2. Generate random patchified latents
+        let patchifiedLatents = LatentUtils.generatePatchifiedLatents(
+            height: size,
+            width: size,
+            seed: seed
+        )
+        var packedLatents = LatentUtils.packPatchifiedToSequence(patchifiedLatents)
+        eval(packedLatents)
+
+        // 3. Setup position IDs
+        let textLength = textEmbeddings.shape[1]
+        let (textIds, imageIds, _) = LatentUtils.combinePositionIDs(
+            textLength: textLength,
+            height: size,
+            width: size
+        )
+
+        // 4. Setup scheduler
+        let scheduler = FlowMatchEulerScheduler()
+        let imageSeqLen = packedLatents.shape[1]
+        scheduler.setTimesteps(numInferenceSteps: validationSteps, imageSeqLen: imageSeqLen, strength: 1.0)
+
+        // 5. Denoising loop
+        let guidanceTensor: MLXArray? = modelType.usesGuidanceEmbeds ? MLXArray([4.0]) : nil
+
+        for stepIdx in 0..<(scheduler.sigmas.count - 1) {
+            let sigma = scheduler.sigmas[stepIdx]
+            let t = MLXArray([sigma])
+
+            let noisePred = transformer.callAsFunction(
+                hiddenStates: packedLatents,
+                encoderHiddenStates: textEmbeddings,
+                timestep: t,
+                guidance: guidanceTensor,
+                imgIds: imageIds,
+                txtIds: textIds
+            )
+
+            packedLatents = scheduler.step(
+                modelOutput: noisePred,
+                timestep: sigma,
+                sample: packedLatents
+            )
+            eval(packedLatents)
+        }
+
+        // 6. Unpack and denormalize latents
+        var finalPatchified = LatentUtils.unpackSequenceToPatchified(
+            packedLatents,
+            height: size,
+            width: size
+        )
+        finalPatchified = LatentUtils.denormalizeLatentsWithBatchNorm(
+            finalPatchified,
+            runningMean: vae.batchNormRunningMean,
+            runningVar: vae.batchNormRunningVar
+        )
+        let finalLatents = LatentUtils.unpatchifyLatents(finalPatchified)
+        eval(finalLatents)
+
+        // 7. Decode with VAE
+        let decoded = vae.decode(finalLatents)
+        eval(decoded)
+
+        // 8. Convert to image
+        guard let image = postprocessVAEOutput(decoded) else {
+            Flux2Debug.log("[Validation] Failed to convert VAE output to image")
+            return nil
+        }
+
+        // 9. Save to disk
+        let outputDir = config.outputPath.deletingLastPathComponent()
+        let filename = "preview_\(step).png"
+        let outputURL = outputDir.appendingPathComponent(filename)
+
+        try saveImage(image, to: outputURL)
+
+        // Also save as preview_latest.png
+        let latestURL = outputDir.appendingPathComponent("preview_latest.png")
+        try saveImage(image, to: latestURL)
+
+        Flux2Debug.log("[Validation] Saved preview image: \(outputURL.lastPathComponent)")
+
+        return outputURL
+    }
+
+    /// Save a CGImage to disk as PNG
+    private func saveImage(_ image: CGImage, to url: URL) throws {
+        guard let destination = CGImageDestinationCreateWithURL(
+            url as CFURL,
+            UTType.png.identifier as CFString,
+            1,
+            nil
+        ) else {
+            throw LoRATrainerError.trainingFailed("Failed to create image destination")
+        }
+
+        CGImageDestinationAddImage(destination, image, nil)
+
+        guard CGImageDestinationFinalize(destination) else {
+            throw LoRATrainerError.trainingFailed("Failed to write image to disk")
+        }
+    }
+
+    /// Clean up old checkpoint files, keeping only the most recent N
+    private func cleanupOldCheckpoints(in directory: URL, keepLast n: Int) {
+        let fm = FileManager.default
+
+        do {
+            let files = try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.creationDateKey])
+            let checkpoints = files.filter { $0.lastPathComponent.hasPrefix("checkpoint_") && $0.pathExtension == "safetensors" }
+
+            // Sort by step number (descending)
+            let sorted = checkpoints.sorted { url1, url2 in
+                let step1 = extractStepNumber(from: url1.lastPathComponent) ?? 0
+                let step2 = extractStepNumber(from: url2.lastPathComponent) ?? 0
+                return step1 > step2
+            }
+
+            // Delete all but the last N
+            if sorted.count > n {
+                for checkpoint in sorted.dropFirst(n) {
+                    try fm.removeItem(at: checkpoint)
+                    // Also remove the .json metadata file
+                    let metadataURL = checkpoint.deletingPathExtension().appendingPathExtension("json")
+                    try? fm.removeItem(at: metadataURL)
+                    Flux2Debug.log("[Checkpoint] Cleaned up old checkpoint: \(checkpoint.lastPathComponent)")
+                }
+            }
+        } catch {
+            Flux2Debug.log("[Checkpoint] Error cleaning up old checkpoints: \(error.localizedDescription)")
+        }
+    }
+
+    /// Extract step number from checkpoint filename (e.g., "checkpoint_500.safetensors" -> 500)
+    private func extractStepNumber(from filename: String) -> Int? {
+        let pattern = "checkpoint_(\\d+)"
+        if let range = filename.range(of: pattern, options: .regularExpression),
+           let stepStr = filename[range].split(separator: "_").last,
+           let step = Int(stepStr) {
+            return step
+        }
+        return nil
     }
 
     // MARK: - Control

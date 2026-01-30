@@ -432,6 +432,9 @@ class ModelManager: ObservableObject {
         case .klein9B_bf16:
             name = "Klein 9B bf16"
             modelType = "Flux.2 Klein 9B"
+        case .klein4B_base_bf16:
+            name = "Klein 4B Base (Training)"
+            modelType = "Flux.2 Klein 4B"
         }
 
         let size = "\(variant.estimatedSizeGB)GB"

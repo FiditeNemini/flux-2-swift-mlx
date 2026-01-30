@@ -111,6 +111,9 @@ struct TrainLoRA: AsyncParsableCommand {
     @Option(name: .long, help: "Generate validation image every N steps")
     var validateEveryNSteps: Int = 500
 
+    @Option(name: .long, help: "Seed for validation image generation (default: 42)")
+    var validationSeed: UInt64 = 42
+
     // MARK: - Image Arguments
 
     @Option(name: .long, help: "Target image size for training")
@@ -229,7 +232,7 @@ struct TrainLoRA: AsyncParsableCommand {
             validationPrompt: validationPrompt,
             validationEveryNSteps: validateEveryNSteps,
             numValidationImages: 1,
-            validationSeed: nil,
+            validationSeed: validationSeed,
             // Logging
             logEveryNSteps: logEveryNSteps,
             evalEveryNSteps: evalEveryNSteps,
