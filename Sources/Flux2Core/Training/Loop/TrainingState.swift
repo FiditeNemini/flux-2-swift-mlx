@@ -40,7 +40,13 @@ public struct TrainingState: Codable, Sendable {
     
     /// Step at which best loss was achieved
     public var bestLossStep: Int
-    
+
+    /// Last validation loss (nil if no validation dataset)
+    public var lastValidationLoss: Float?
+
+    /// Best validation loss seen
+    public var bestValidationLoss: Float?
+
     // MARK: - Timing
     
     /// Training start time
@@ -222,7 +228,10 @@ public enum TrainingEvent: Sendable {
     
     /// Validation completed
     case validationCompleted(loss: Float, step: Int)
-    
+
+    /// Validation loss computed (training vs validation loss comparison)
+    case validationLossComputed(step: Int, trainLoss: Float, valLoss: Float)
+
     /// Validation image generated
     case validationImageGenerated(path: String, step: Int)
     
@@ -264,7 +273,12 @@ public final class ConsoleTrainingEventHandler: TrainingEventHandler, @unchecked
             
         case .validationCompleted(let loss, let step):
             print("[Training] Validation at step \(step) | Loss: \(String(format: "%.4f", loss))")
-            
+
+        case .validationLossComputed(let step, let trainLoss, let valLoss):
+            let gap = valLoss - trainLoss
+            let gapStr = gap > 0 ? "+\(String(format: "%.4f", gap))" : String(format: "%.4f", gap)
+            print("[Training] Step \(step) | Train: \(String(format: "%.4f", trainLoss)) | Val: \(String(format: "%.4f", valLoss)) (\(gapStr))")
+
         case .validationImageGenerated(let path, let step):
             print("[Training] Generated validation image at step \(step): \(path)")
             

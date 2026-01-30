@@ -22,12 +22,21 @@ public final class LoRATrainer: @unchecked Sendable {
     
     /// Training dataset
     private var dataset: TrainingDataset?
-    
+
+    /// Validation dataset (for validation loss computation)
+    private var validationDataset: TrainingDataset?
+
     /// Latent cache
     private var latentCache: LatentCache?
-    
+
+    /// Validation latent cache
+    private var validationLatentCache: LatentCache?
+
     /// Text embedding cache
     private var textEmbeddingCache: TextEmbeddingCache?
+
+    /// Validation text embedding cache
+    private var validationTextEmbeddingCache: TextEmbeddingCache?
     
     /// Reference to transformer with injected LoRA (for saving)
     private weak var loraTransformer: Flux2Transformer2DModel?
@@ -113,15 +122,42 @@ public final class LoRATrainer: @unchecked Sendable {
         }
         
         Flux2Debug.log("[LoRATrainer] Dataset loaded: \(dataset.count) samples")
-        
+
+        // Initialize validation dataset if provided
+        if let valPath = config.validationDatasetPath {
+            var valConfig = config
+            valConfig.datasetPath = valPath
+            validationDataset = try TrainingDataset(config: valConfig)
+            if let valDataset = validationDataset {
+                let valValidation = valDataset.validate()
+                if !valValidation.isValid {
+                    Flux2Debug.log("[LoRATrainer] Warning: Validation dataset invalid, skipping: \(valValidation.errors.joined(separator: ", "))")
+                    validationDataset = nil
+                } else {
+                    Flux2Debug.log("[LoRATrainer] Validation dataset loaded: \(valDataset.count) samples")
+                }
+            }
+        }
+
         // Initialize caches
         if config.cacheLatents {
             latentCache = LatentCache(config: config)
+            // Also create cache for validation dataset
+            if validationDataset != nil, let valPath = config.validationDatasetPath {
+                var valConfig = config
+                valConfig.datasetPath = valPath
+                validationLatentCache = LatentCache(config: valConfig)
+            }
         }
-        
+
         if config.cacheTextEmbeddings {
             let textCacheDir = config.datasetPath.appendingPathComponent(".text_cache")
             textEmbeddingCache = TextEmbeddingCache(cacheDirectory: textCacheDir)
+            // Also create cache for validation dataset
+            if validationDataset != nil, let valPath = config.validationDatasetPath {
+                let valTextCacheDir = valPath.appendingPathComponent(".text_cache")
+                validationTextEmbeddingCache = TextEmbeddingCache(cacheDirectory: valTextCacheDir)
+            }
         }
 
         // Initialize checkpoint manager
@@ -165,17 +201,31 @@ public final class LoRATrainer: @unchecked Sendable {
         guard let dataset = dataset, let cache = latentCache else {
             throw LoRATrainerError.notPrepared
         }
-        
-        Flux2Debug.log("[LoRATrainer] Pre-caching latents...")
-        
+
+        Flux2Debug.log("[LoRATrainer] Pre-caching training latents...")
+
         try await cache.preEncodeDataset(dataset, vae: vae) { current, total in
             let progress = Float(current) / Float(total) * 100
             Flux2Debug.log("  Pre-caching: \(current)/\(total) (\(Int(progress))%)")
         }
-        
+
         let stats = cache.getStatistics()
-        Flux2Debug.log("[LoRATrainer] Latent caching complete:")
+        Flux2Debug.log("[LoRATrainer] Training latent caching complete:")
         Flux2Debug.log(stats.summary)
+
+        // Also cache validation latents if validation dataset exists
+        if let valDataset = validationDataset, let valCache = validationLatentCache {
+            Flux2Debug.log("[LoRATrainer] Pre-caching validation latents...")
+
+            try await valCache.preEncodeDataset(valDataset, vae: vae) { current, total in
+                let progress = Float(current) / Float(total) * 100
+                Flux2Debug.log("  Pre-caching validation: \(current)/\(total) (\(Int(progress))%)")
+            }
+
+            let valStats = valCache.getStatistics()
+            Flux2Debug.log("[LoRATrainer] Validation latent caching complete:")
+            Flux2Debug.log(valStats.summary)
+        }
     }
     
     // MARK: - Main Training Loop
@@ -312,6 +362,32 @@ public final class LoRATrainer: @unchecked Sendable {
                     // Logging
                     if state.globalStep % config.logEveryNSteps == 0 {
                         Flux2Debug.log(state.progressSummary)
+                    }
+
+                    // Validation loss computation (at validation intervals)
+                    if config.validationEveryNSteps > 0 &&
+                       validationDataset != nil &&
+                       state.globalStep % config.validationEveryNSteps == 0 {
+                        do {
+                            if let valLoss = try await computeValidationLoss(
+                                transformer: transformer,
+                                vae: vae,
+                                textEncoder: textEncoder
+                            ) {
+                                state.lastValidationLoss = valLoss
+                                self.state = state
+                                Flux2Debug.log("[Validation] Step \(state.globalStep) - Val Loss: \(String(format: "%.4f", valLoss)) | Train Loss: \(String(format: "%.4f", state.currentLoss))")
+
+                                // Emit validation loss event
+                                eventHandler?.handleEvent(.validationLossComputed(
+                                    step: state.globalStep,
+                                    trainLoss: state.currentLoss,
+                                    valLoss: valLoss
+                                ))
+                            }
+                        } catch {
+                            Flux2Debug.log("[Validation] Failed to compute validation loss: \(error.localizedDescription)")
+                        }
                     }
                     
                     // Checkpointing - save intermediate LoRA weights
@@ -594,6 +670,151 @@ public final class LoRATrainer: @unchecked Sendable {
         }
 
         return lossValue
+    }
+
+    // MARK: - Validation Loss
+
+    /// Compute validation loss on the validation dataset (no gradient computation)
+    /// Returns the average loss across all validation samples, or nil if no validation dataset
+    private func computeValidationLoss(
+        transformer: Flux2Transformer2DModel,
+        vae: AutoencoderKLFlux2?,
+        textEncoder: (String) async throws -> MLXArray
+    ) async throws -> Float? {
+        guard let valDataset = validationDataset else {
+            return nil
+        }
+
+        var totalLoss: Float = 0.0
+        var sampleCount: Int = 0
+
+        // Process all validation samples
+        valDataset.startEpoch()
+
+        while let batch = try valDataset.nextBatch() {
+            let loss = try await computeBatchLoss(
+                batch: batch,
+                transformer: transformer,
+                vae: vae,
+                textEncoder: textEncoder,
+                useValidationCache: true
+            )
+            totalLoss += loss * Float(batch.count)
+            sampleCount += batch.count
+        }
+
+        guard sampleCount > 0 else { return nil }
+
+        let avgLoss = totalLoss / Float(sampleCount)
+
+        // Clear GPU cache after validation
+        MLX.Memory.clearCache()
+
+        return avgLoss
+    }
+
+    /// Compute loss for a batch without gradient computation (for validation)
+    private func computeBatchLoss(
+        batch: TrainingBatch,
+        transformer: Flux2Transformer2DModel,
+        vae: AutoencoderKLFlux2?,
+        textEncoder: (String) async throws -> MLXArray,
+        useValidationCache: Bool
+    ) async throws -> Float {
+        // Get latents (from validation cache or encode)
+        let latents: MLXArray
+        let cacheToUse = useValidationCache ? validationLatentCache : latentCache
+
+        if let cache = cacheToUse {
+            latents = try cache.getLatents(for: batch, vae: vae)
+        } else if let vae = vae {
+            let normalizedImages = batch.images * 2.0 - 1.0
+            let nchwImages = normalizedImages.transposed(0, 3, 1, 2)
+            latents = vae.encode(nchwImages)
+        } else {
+            throw LoRATrainerError.noVAEProvided
+        }
+
+        // Get text embeddings (from validation cache or encode)
+        var hiddenStates: [MLXArray] = []
+        let textCacheToUse = useValidationCache ? validationTextEmbeddingCache : textEmbeddingCache
+
+        for caption in batch.captions {
+            if let cache = textCacheToUse,
+               let cached = try cache.getEmbeddings(for: caption) {
+                let embedding = cached.hidden.shape.count > 2
+                    ? cached.hidden.squeezed(axis: 0)
+                    : cached.hidden
+                hiddenStates.append(embedding)
+            } else {
+                let embeddings = try await textEncoder(caption)
+                let embedding = embeddings.shape.count > 2
+                    ? embeddings.squeezed(axis: 0)
+                    : embeddings
+                hiddenStates.append(embedding)
+
+                // Cache for next time
+                if let cache = textCacheToUse {
+                    try cache.saveEmbeddings(
+                        pooled: MLXArray.zeros([1]),
+                        hidden: embedding,
+                        for: caption
+                    )
+                }
+            }
+        }
+
+        // Stack embeddings
+        let batchedHidden = MLX.stacked(hiddenStates, axis: 0)
+
+        // Create position IDs
+        let batchSize = latents.shape[0]
+        let patchSize = 2
+        let imgH = latents.shape[2] / patchSize
+        let imgW = latents.shape[3] / patchSize
+        let txtLen = batchedHidden.shape[1]
+
+        let txtIds = generateTextPositionIDs(length: txtLen)
+        let imgIds = generateImagePositionIDs(height: imgH, width: imgW)
+
+        // Sample timesteps (use fixed seed for reproducible validation)
+        let timesteps = MLXRandom.randInt(low: 0, high: 1000, [batchSize])
+        let sigmas = timesteps.asType(.float32) / 1000.0
+
+        // Sample noise
+        let noise = MLXRandom.normal(latents.shape)
+
+        // Add noise to latents
+        let sigmasExpanded = sigmas.reshaped([batchSize, 1, 1, 1])
+        let noisyLatents = (1 - sigmasExpanded) * latents + sigmasExpanded * noise
+
+        // Pack latents
+        let packedLatents = packLatentsForTransformer(noisyLatents, patchSize: 2)
+
+        // Prepare guidance
+        let guidance: MLXArray? = modelType.usesGuidanceEmbeds ?
+            MLXArray(Array(repeating: Float(4.0), count: batchSize)) : nil
+
+        // Compute velocity target
+        let velocityTarget = noise - latents
+        let packedVelocityTarget = packLatentsForTransformer(velocityTarget, patchSize: 2)
+
+        // Forward pass (no gradients needed)
+        let modelOutput = transformer(
+            hiddenStates: packedLatents,
+            encoderHiddenStates: batchedHidden,
+            timestep: timesteps.asType(DType.float32),
+            guidance: guidance,
+            imgIds: imgIds.asType(DType.int32),
+            txtIds: txtIds.asType(DType.int32)
+        )
+
+        // Compute MSE loss
+        let loss = mseLoss(predictions: modelOutput, targets: packedVelocityTarget, reduction: .mean)
+
+        // Evaluate to get the loss value
+        eval(loss)
+        return loss.item(Float.self)
     }
 
     /// Flatten ModuleParameters gradients into a simple [path: MLXArray] dictionary

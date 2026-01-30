@@ -20,6 +20,9 @@ struct TrainLoRA: AsyncParsableCommand {
     @Argument(help: "Path to the training dataset directory")
     var dataset: String
 
+    @Option(name: .long, help: "Path to validation dataset directory (for validation loss)")
+    var validationDataset: String?
+
     @Option(name: .shortAndLong, help: "Output path for the trained LoRA (.safetensors)")
     var output: String
 
@@ -191,10 +194,14 @@ struct TrainLoRA: AsyncParsableCommand {
             throw ValidationError("Output directory not found: \(outputDir.path)")
         }
 
+        // Create validation dataset URL if provided
+        let validationDatasetURL = validationDataset.map { URL(fileURLWithPath: $0) }
+
         // Create training configuration
         let config = LoRATrainingConfig(
             // Dataset
             datasetPath: datasetURL,
+            validationDatasetPath: validationDatasetURL,
             captionExtension: captionFormat,
             triggerWord: triggerWord,
             imageSize: imageSize,

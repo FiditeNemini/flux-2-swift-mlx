@@ -534,6 +534,10 @@ final class EasyModeProgressHandler: TrainingEventHandler, @unchecked Sendable {
             break
         case .validationCompleted(_, _):
             break
+        case .validationLossComputed(let step, let trainLoss, let valLoss):
+            let gap = valLoss - trainLoss
+            let indicator = gap > 0.1 ? "⚠️ " : ""
+            print("  \(indicator)Step \(step) - Train: \(String(format: "%.4f", trainLoss)) | Val: \(String(format: "%.4f", valLoss))")
         case .validationImageGenerated(_, _):
             break
         case .completed(let finalLoss, let totalSteps):

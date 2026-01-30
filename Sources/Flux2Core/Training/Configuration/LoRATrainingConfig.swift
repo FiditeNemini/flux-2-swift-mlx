@@ -113,7 +113,10 @@ public struct LoRATrainingConfig: Codable, Sendable {
     
     /// Path to the dataset directory
     public var datasetPath: URL
-    
+
+    /// Path to validation dataset directory (optional, for validation loss)
+    public var validationDatasetPath: URL?
+
     /// Caption file extension ("txt" or "jsonl")
     public var captionExtension: String
     
@@ -257,6 +260,7 @@ public struct LoRATrainingConfig: Codable, Sendable {
     public init(
         // Dataset
         datasetPath: URL,
+        validationDatasetPath: URL? = nil,
         captionExtension: String = "txt",
         triggerWord: String? = nil,
         imageSize: Int = 512,
@@ -307,6 +311,7 @@ public struct LoRATrainingConfig: Codable, Sendable {
         resumeFromCheckpoint: URL? = nil
     ) {
         self.datasetPath = datasetPath
+        self.validationDatasetPath = validationDatasetPath
         self.captionExtension = captionExtension
         self.triggerWord = triggerWord
         self.imageSize = imageSize
