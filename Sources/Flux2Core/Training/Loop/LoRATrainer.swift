@@ -65,10 +65,20 @@ public final class LoRATrainer: @unchecked Sendable {
     /// Whether training should stop
     private var shouldStop: Bool = false
 
-    /// Early stopping state
+    /// Early stopping state (loss plateau detection)
     private var bestLoss: Float = Float.infinity
     private var epochsWithoutImprovement: Int = 0
     private var earlyStopReason: String?
+
+    /// Overfitting detection state (train/val gap)
+    private var lastValGap: Float = 0
+    private var consecutiveGapIncreases: Int = 0
+    private var bestValGap: Float = Float.infinity
+
+    /// Val loss stagnation detection state (per epoch)
+    private var bestValLossThisEpoch: Float = Float.infinity
+    private var bestValLossPreviousEpoch: Float = Float.infinity
+    private var consecutiveValStagnationEpochs: Int = 0
 
     /// Cached valueAndGrad function to avoid reconstructing gradient graph per step
     /// Type: (Model, [MLXArray]) -> ([MLXArray], ModuleParameters)
@@ -79,6 +89,9 @@ public final class LoRATrainer: @unchecked Sendable {
 
     /// Text encoder reference for validation image generation
     private var validationTextEncoder: ((String) async throws -> MLXArray)?
+
+    /// EMA manager for weight averaging (optional, based on config)
+    private var emaManager: EMAManager?
 
     // MARK: - Initialization
     
@@ -274,6 +287,13 @@ public final class LoRATrainer: @unchecked Sendable {
 
         Flux2Debug.log("[LoRATrainer] Base model frozen, LoRA parameters unfrozen")
 
+        // Initialize EMA if enabled
+        if config.useEMA {
+            emaManager = EMAManager(decay: config.emaDecay)
+            emaManager?.initialize(from: transformer)
+            Flux2Debug.log("[LoRATrainer] EMA initialized with decay=\(config.emaDecay)")
+        }
+
         // Create AdamW optimizer for the transformer's trainable parameters (LoRA only)
         self.optimizer = AdamW(
             learningRate: config.learningRate,
@@ -376,7 +396,10 @@ public final class LoRATrainer: @unchecked Sendable {
                             ) {
                                 state.lastValidationLoss = valLoss
                                 self.state = state
-                                Flux2Debug.log("[Validation] Step \(state.globalStep) - Val Loss: \(String(format: "%.4f", valLoss)) | Train Loss: \(String(format: "%.4f", state.currentLoss))")
+                                
+                                // Calculate gap between validation and training loss
+                                let valGap = valLoss - state.currentLoss
+                                Flux2Debug.log("[Validation] Step \(state.globalStep) - Val Loss: \(String(format: "%.4f", valLoss)) | Train Loss: \(String(format: "%.4f", state.currentLoss)) | Gap: \(String(format: "%+.4f", valGap))")
 
                                 // Emit validation loss event
                                 eventHandler?.handleEvent(.validationLossComputed(
@@ -384,6 +407,41 @@ public final class LoRATrainer: @unchecked Sendable {
                                     trainLoss: state.currentLoss,
                                     valLoss: valLoss
                                 ))
+                                
+                                // Overfitting detection based on train/val gap
+                                if config.earlyStoppingOnOverfit {
+                                    // Check if gap exceeds maximum allowed
+                                    if valGap > config.earlyStoppingMaxValGap {
+                                        earlyStopReason = "Overfitting detected: val-train gap (\(String(format: "%.4f", valGap))) exceeds max (\(String(format: "%.4f", config.earlyStoppingMaxValGap)))"
+                                        Flux2Debug.log("[Training] Early stopping: \(earlyStopReason!)")
+                                        shouldStop = true
+                                    }
+                                    // Check if gap is consistently increasing
+                                    else if valGap > lastValGap + 0.01 {  // Gap increased significantly
+                                        consecutiveGapIncreases += 1
+                                        Flux2Debug.log("[Training] Overfitting warning: gap increasing (\(consecutiveGapIncreases)/\(config.earlyStoppingGapPatience))")
+                                        
+                                        if consecutiveGapIncreases >= config.earlyStoppingGapPatience {
+                                            earlyStopReason = "Overfitting detected: gap increased \(consecutiveGapIncreases) times (was \(String(format: "%.4f", bestValGap)), now \(String(format: "%.4f", valGap)))"
+                                            Flux2Debug.log("[Training] Early stopping: \(earlyStopReason!)")
+                                            shouldStop = true
+                                        }
+                                    } else {
+                                        // Gap stable or decreasing
+                                        consecutiveGapIncreases = 0
+                                        if valGap < bestValGap {
+                                            bestValGap = valGap
+                                        }
+                                    }
+                                    lastValGap = valGap
+                                }
+
+                                // Track best val loss this epoch (for epoch-based stagnation detection)
+                                if config.earlyStoppingOnValStagnation {
+                                    if valLoss < bestValLossThisEpoch {
+                                        bestValLossThisEpoch = valLoss
+                                    }
+                                }
                             }
                         } catch {
                             Flux2Debug.log("[Validation] Failed to compute validation loss: \(error.localizedDescription)")
@@ -454,7 +512,7 @@ public final class LoRATrainer: @unchecked Sendable {
                     avgLoss: state.averageLoss
                 ))
 
-                // Early stopping check
+                // Early stopping check (train loss plateau)
                 if config.enableEarlyStopping {
                     let currentLoss = state.averageLoss
                     let improvement = bestLoss - currentLoss
@@ -475,6 +533,33 @@ public final class LoRATrainer: @unchecked Sendable {
                             shouldStop = true
                         }
                     }
+                }
+
+                // Val loss stagnation check (epoch-based)
+                if config.earlyStoppingOnValStagnation && !shouldStop && bestValLossThisEpoch < Float.infinity {
+                    let valImprovement = bestValLossPreviousEpoch - bestValLossThisEpoch
+
+                    if bestValLossPreviousEpoch < Float.infinity {
+                        // We have a previous epoch to compare to
+                        if valImprovement < config.earlyStoppingMinValImprovement {
+                            consecutiveValStagnationEpochs += 1
+                            Flux2Debug.log("[Training] Val loss stagnation: Δval=\(String(format: "%.4f", valImprovement)) < \(String(format: "%.4f", config.earlyStoppingMinValImprovement)) (\(consecutiveValStagnationEpochs)/\(config.earlyStoppingValStagnationPatience) epochs)")
+
+                            if consecutiveValStagnationEpochs >= config.earlyStoppingValStagnationPatience {
+                                earlyStopReason = "Val loss stagnation: no significant improvement for \(consecutiveValStagnationEpochs) epochs (previous: \(String(format: "%.4f", bestValLossPreviousEpoch)), current: \(String(format: "%.4f", bestValLossThisEpoch)))"
+                                Flux2Debug.log("[Training] Early stopping: \(earlyStopReason!)")
+                                shouldStop = true
+                            }
+                        } else {
+                            // Good improvement, reset counter
+                            consecutiveValStagnationEpochs = 0
+                            Flux2Debug.log("[Training] Val loss improved this epoch: Δval=\(String(format: "%.4f", valImprovement))")
+                        }
+                    }
+
+                    // Update for next epoch
+                    bestValLossPreviousEpoch = bestValLossThisEpoch
+                    bestValLossThisEpoch = Float.infinity  // Reset for next epoch
                 }
 
                 // Reset epoch step for next epoch
@@ -544,9 +629,18 @@ public final class LoRATrainer: @unchecked Sendable {
         }
 
         // Get text embeddings (from cache or encode)
+        // Apply caption dropout for generalization
         var hiddenStates: [MLXArray] = []
 
-        for caption in batch.captions {
+        for originalCaption in batch.captions {
+            // Apply caption dropout: randomly replace caption with empty string
+            let caption: String
+            if config.captionDropoutRate > 0 && Float.random(in: 0..<1) < config.captionDropoutRate {
+                caption = ""  // Drop caption for this sample
+            } else {
+                caption = originalCaption
+            }
+
             if let cache = textEmbeddingCache,
                let cached = try cache.getEmbeddings(for: caption) {
                 // Squeeze batch dimension if present: [1, seq, dim] -> [seq, dim]
@@ -656,6 +750,9 @@ public final class LoRATrainer: @unchecked Sendable {
             throw LoRATrainerError.trainingFailed("Optimizer not initialized")
         }
         optimizer.update(model: transformer, gradients: clippedGrads)
+
+        // Update EMA weights after optimizer step
+        emaManager?.update(from: transformer)
 
         // IMPORTANT: Must call eval() at EVERY step to prevent MLX lazy evaluation graph accumulation
         // Without eval(), the computation graph grows exponentially, causing later steps to be extremely slow
@@ -1134,9 +1231,23 @@ public final class LoRATrainer: @unchecked Sendable {
     // MARK: - Save Weights
 
     /// Save LoRA weights from transformer to safetensors file
-    private func saveLoRAWeights(from transformer: Flux2Transformer2DModel, to url: URL) throws {
-        // Get LoRA weights from transformer (already in Diffusers format)
-        let weights = transformer.getLoRAParameters()
+    /// - Parameters:
+    ///   - transformer: Transformer with LoRA layers
+    ///   - url: Destination path for weights
+    ///   - useEMA: If true and EMA is enabled, saves EMA weights instead of current weights
+    private func saveLoRAWeights(from transformer: Flux2Transformer2DModel, to url: URL, useEMA: Bool = true) throws {
+        // Get LoRA weights - prefer EMA if available and requested
+        let weights: [String: MLXArray]
+        let isEMA: Bool
+
+        if useEMA, let ema = emaManager, ema.isInitialized {
+            weights = ema.getEMAWeights()
+            isEMA = true
+            Flux2Debug.log("[LoRATrainer] Using EMA weights for saving")
+        } else {
+            weights = transformer.getLoRAParameters()
+            isEMA = false
+        }
 
         guard !weights.isEmpty else {
             throw LoRATrainerError.trainingFailed("No LoRA weights found in transformer")
@@ -1152,12 +1263,15 @@ public final class LoRATrainer: @unchecked Sendable {
             alpha: config.alpha,
             targetLayers: config.targetLayers.rawValue,
             triggerWord: config.triggerWord,
-            trainedOn: Date()
+            trainedOn: Date(),
+            usedEMA: isEMA,
+            emaDecay: isEMA ? config.emaDecay : nil
         )
         let data = try JSONEncoder().encode(metadata)
         try data.write(to: metadataPath)
 
-        Flux2Debug.log("[LoRATrainer] Saved LoRA weights to \(url.path) (\(weights.count) tensors)")
+        let emaLabel = isEMA ? " (EMA)" : ""
+        Flux2Debug.log("[LoRATrainer] Saved LoRA weights\(emaLabel) to \(url.path) (\(weights.count) tensors)")
     }
 
     // MARK: - Validation Image Generation

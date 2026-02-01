@@ -247,6 +247,28 @@ public struct LoRAWeightsMetadata: Codable, Sendable {
     public let targetLayers: String
     public let triggerWord: String?
     public let trainedOn: Date
+    /// Whether EMA weights were used (if available)
+    public let usedEMA: Bool?
+    /// EMA decay factor used (if EMA was enabled)
+    public let emaDecay: Float?
+
+    public init(
+        rank: Int,
+        alpha: Float,
+        targetLayers: String,
+        triggerWord: String?,
+        trainedOn: Date,
+        usedEMA: Bool? = nil,
+        emaDecay: Float? = nil
+    ) {
+        self.rank = rank
+        self.alpha = alpha
+        self.targetLayers = targetLayers
+        self.triggerWord = triggerWord
+        self.trainedOn = trainedOn
+        self.usedEMA = usedEMA
+        self.emaDecay = emaDecay
+    }
 }
 
 /// Information about a saved checkpoint

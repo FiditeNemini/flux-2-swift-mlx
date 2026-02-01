@@ -110,7 +110,7 @@ public enum LRSchedulerType: String, Codable, Sendable, CaseIterable {
 public struct LoRATrainingConfig: Codable, Sendable {
     
     // MARK: - Dataset Configuration
-    
+
     /// Path to the dataset directory
     public var datasetPath: URL
 
@@ -119,18 +119,22 @@ public struct LoRATrainingConfig: Codable, Sendable {
 
     /// Caption file extension ("txt" or "jsonl")
     public var captionExtension: String
-    
+
     /// Trigger word to replace [trigger] in captions
     public var triggerWord: String?
-    
+
     /// Target image size (will resize/crop images)
     public var imageSize: Int
-    
+
     /// Enable aspect ratio bucketing (multiple resolutions)
     public var enableBucketing: Bool
-    
+
     /// Shuffle training data
     public var shuffleDataset: Bool
+
+    /// Caption dropout rate for generalization (0.0-1.0, 0 = disabled)
+    /// When triggered, replaces caption with empty string to help model generalize
+    public var captionDropoutRate: Float
     
     // MARK: - LoRA Configuration
     
@@ -212,7 +216,7 @@ public struct LoRATrainingConfig: Codable, Sendable {
     /// Save checkpoint every N steps (0 to disable)
     public var saveEveryNSteps: Int
     
-    /// Keep only the last N checkpoints (0 to keep all)
+    /// Keep only the last N checkpoints (0 to keep all) - default is 0 to let user manage checkpoints manually
     public var keepOnlyLastNCheckpoints: Int
     
     /// Validation prompt for preview generation
@@ -250,6 +254,36 @@ public struct LoRATrainingConfig: Codable, Sendable {
     /// Minimum improvement in loss to reset patience counter
     public var earlyStoppingMinDelta: Float
 
+    // MARK: - Overfitting Detection (Early Stopping)
+
+    /// Enable early stopping when overfitting is detected (val loss gap increases)
+    public var earlyStoppingOnOverfit: Bool
+
+    /// Maximum allowed gap between validation and training loss before triggering early stop
+    public var earlyStoppingMaxValGap: Float
+
+    /// Number of consecutive validation checks where gap increases before stopping
+    public var earlyStoppingGapPatience: Int
+
+    // MARK: - Val Loss Stagnation Detection (Early Stopping, Epoch-based)
+
+    /// Enable early stopping when validation loss improvement stagnates (checked at end of each epoch)
+    public var earlyStoppingOnValStagnation: Bool
+
+    /// Minimum val loss improvement per epoch required to consider progress (absolute value)
+    public var earlyStoppingMinValImprovement: Float
+
+    /// Number of consecutive epochs with insufficient val loss improvement before stopping
+    public var earlyStoppingValStagnationPatience: Int
+
+    // MARK: - EMA (Exponential Moving Average)
+
+    /// Use EMA for weight averaging (smoother training, recommended for LoRA)
+    public var useEMA: Bool
+
+    /// EMA decay factor (0.99-0.9999, higher = slower averaging)
+    public var emaDecay: Float
+
     // MARK: - Resume Training
 
     /// Path to checkpoint to resume from (nil = start fresh)
@@ -266,6 +300,7 @@ public struct LoRATrainingConfig: Codable, Sendable {
         imageSize: Int = 512,
         enableBucketing: Bool = false,
         shuffleDataset: Bool = true,
+        captionDropoutRate: Float = 0.0,
         // LoRA
         rank: Int = 16,
         alpha: Float = 16.0,
@@ -294,7 +329,7 @@ public struct LoRATrainingConfig: Codable, Sendable {
         // Output
         outputPath: URL,
         saveEveryNSteps: Int = 500,
-        keepOnlyLastNCheckpoints: Int = 3,
+        keepOnlyLastNCheckpoints: Int = 0,
         validationPrompt: String? = nil,
         validationEveryNSteps: Int = 500,
         numValidationImages: Int = 1,
@@ -307,6 +342,17 @@ public struct LoRATrainingConfig: Codable, Sendable {
         enableEarlyStopping: Bool = false,
         earlyStoppingPatience: Int = 5,
         earlyStoppingMinDelta: Float = 0.01,
+        // Overfitting detection
+        earlyStoppingOnOverfit: Bool = false,
+        earlyStoppingMaxValGap: Float = 0.5,
+        earlyStoppingGapPatience: Int = 3,
+        // Val loss stagnation detection
+        earlyStoppingOnValStagnation: Bool = true,
+        earlyStoppingMinValImprovement: Float = 0.1,
+        earlyStoppingValStagnationPatience: Int = 2,
+        // EMA
+        useEMA: Bool = true,
+        emaDecay: Float = 0.99,
         // Resume
         resumeFromCheckpoint: URL? = nil
     ) {
@@ -317,6 +363,7 @@ public struct LoRATrainingConfig: Codable, Sendable {
         self.imageSize = imageSize
         self.enableBucketing = enableBucketing
         self.shuffleDataset = shuffleDataset
+        self.captionDropoutRate = captionDropoutRate
         self.rank = rank
         self.alpha = alpha
         self.dropout = dropout
@@ -352,6 +399,14 @@ public struct LoRATrainingConfig: Codable, Sendable {
         self.enableEarlyStopping = enableEarlyStopping
         self.earlyStoppingPatience = earlyStoppingPatience
         self.earlyStoppingMinDelta = earlyStoppingMinDelta
+        self.earlyStoppingOnOverfit = earlyStoppingOnOverfit
+        self.earlyStoppingMaxValGap = earlyStoppingMaxValGap
+        self.earlyStoppingGapPatience = earlyStoppingGapPatience
+        self.earlyStoppingOnValStagnation = earlyStoppingOnValStagnation
+        self.earlyStoppingMinValImprovement = earlyStoppingMinValImprovement
+        self.earlyStoppingValStagnationPatience = earlyStoppingValStagnationPatience
+        self.useEMA = useEMA
+        self.emaDecay = emaDecay
         self.resumeFromCheckpoint = resumeFromCheckpoint
     }
     

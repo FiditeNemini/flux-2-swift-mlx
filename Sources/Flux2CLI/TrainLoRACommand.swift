@@ -32,6 +32,9 @@ struct TrainLoRA: AsyncParsableCommand {
     @Option(name: .long, help: "Caption file extension (txt or jsonl)")
     var captionFormat: String = "txt"
 
+    @Option(name: .long, help: "Caption dropout rate for generalization (0.0-1.0, default: 0.0)")
+    var captionDropout: Float = 0.0
+
     // MARK: - Model Arguments
 
     @Option(name: .long, help: "Model to train on: dev, klein-4b, klein-9b")
@@ -105,8 +108,8 @@ struct TrainLoRA: AsyncParsableCommand {
     @Option(name: .long, help: "Save checkpoint every N steps (0 to disable)")
     var saveEveryNSteps: Int = 500
 
-    @Option(name: .long, help: "Keep only the last N checkpoints")
-    var keepCheckpoints: Int = 3
+    @Option(name: .long, help: "Keep only the last N checkpoints (0 = keep all)")
+    var keepCheckpoints: Int = 0
 
     @Option(name: .long, help: "Validation prompt for preview generation")
     var validationPrompt: String?
@@ -135,6 +138,35 @@ struct TrainLoRA: AsyncParsableCommand {
 
     @Option(name: .long, help: "Minimum loss improvement to reset patience (default: 0.01)")
     var earlyStopMinDelta: Float = 0.01
+
+    @Flag(name: .long, help: "Enable early stopping on overfitting (val-train gap increases)")
+    var earlyStopOnOverfit: Bool = false
+
+    @Option(name: .long, help: "Maximum val-train gap before stopping (default: 0.5)")
+    var earlyStopMaxGap: Float = 0.5
+
+    @Option(name: .long, help: "Consecutive gap increases before stopping (default: 3)")
+    var earlyStopGapPatience: Int = 3
+
+    @Flag(name: .long, help: "Enable early stopping on val loss stagnation (epoch-based, default: true)")
+    var earlyStopOnValStagnation: Bool = false
+
+    @Option(name: .long, help: "Min val loss improvement per epoch to consider progress (default: 0.1)")
+    var earlyStopMinValImprovement: Float = 0.1
+
+    @Option(name: .long, help: "Consecutive epochs without val improvement before stopping (default: 2)")
+    var earlyStopValPatience: Int = 2
+
+    // MARK: - EMA Arguments
+
+    @Flag(name: .long, help: "Use EMA for weight averaging (default: enabled)")
+    var ema: Bool = false
+
+    @Flag(name: .long, help: "Disable EMA weight averaging")
+    var noEma: Bool = false
+
+    @Option(name: .long, help: "EMA decay factor (0.99-0.9999, higher = slower averaging)")
+    var emaDecay: Float = 0.99
 
     // MARK: - Misc Arguments
 
@@ -207,6 +239,7 @@ struct TrainLoRA: AsyncParsableCommand {
             imageSize: imageSize,
             enableBucketing: bucketing,
             shuffleDataset: true,
+            captionDropoutRate: captionDropout,
             // LoRA
             rank: rank,
             alpha: alpha,
@@ -248,6 +281,17 @@ struct TrainLoRA: AsyncParsableCommand {
             enableEarlyStopping: earlyStop,
             earlyStoppingPatience: earlyStopPatience,
             earlyStoppingMinDelta: earlyStopMinDelta,
+            // Overfitting detection
+            earlyStoppingOnOverfit: earlyStopOnOverfit,
+            earlyStoppingMaxValGap: earlyStopMaxGap,
+            earlyStoppingGapPatience: earlyStopGapPatience,
+            // Val loss stagnation detection
+            earlyStoppingOnValStagnation: earlyStopOnValStagnation,
+            earlyStoppingMinValImprovement: earlyStopMinValImprovement,
+            earlyStoppingValStagnationPatience: earlyStopValPatience,
+            // EMA - default is enabled unless --no-ema is passed
+            useEMA: !noEma,
+            emaDecay: emaDecay,
             // Resume
             resumeFromCheckpoint: resume.map { URL(fileURLWithPath: $0) }
         )
@@ -491,6 +535,9 @@ struct TrainLoRA: AsyncParsableCommand {
         print()
         print("Training:")
         print("  Learning rate: \(String(format: "%.2e", config.learningRate))")
+        if config.captionDropoutRate > 0 {
+            print("  Caption dropout: \(String(format: "%.1f", config.captionDropoutRate * 100))%")
+        }
         print("  Batch size: \(config.batchSize)")
         print("  Gradient accumulation: \(config.gradientAccumulationSteps)")
         print("  Effective batch size: \(config.effectiveBatchSize)")
@@ -503,6 +550,12 @@ struct TrainLoRA: AsyncParsableCommand {
         if config.enableEarlyStopping {
             print("  Early stopping: enabled (patience=\(config.earlyStoppingPatience), minDelta=\(config.earlyStoppingMinDelta))")
         }
+        if config.earlyStoppingOnOverfit {
+            print("  Overfitting detection: enabled (maxGap=\(config.earlyStoppingMaxValGap), patience=\(config.earlyStoppingGapPatience))")
+        }
+        print()
+        print("Weight Averaging:")
+        print("  EMA: \(config.useEMA ? "enabled (decay=\(config.emaDecay))" : "disabled")")
         print()
         print("Memory optimizations:")
         print("  Gradient checkpointing: \(config.gradientCheckpointing ? "enabled" : "disabled")")
