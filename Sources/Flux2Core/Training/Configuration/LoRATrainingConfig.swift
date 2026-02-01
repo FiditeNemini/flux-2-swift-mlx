@@ -242,6 +242,11 @@ public struct LoRATrainingConfig: Codable, Sendable {
     /// Added to timesteps to bias toward higher noise levels
     public var fluxShiftValue: Float
 
+    // MARK: - Loss Weighting
+
+    /// Loss weighting strategy (Ostris "weighted" = bellShaped)
+    public var lossWeighting: LossWeighting
+
     // MARK: - Memory Optimization
     
     /// Quantization level for base model
@@ -379,6 +384,8 @@ public struct LoRATrainingConfig: Codable, Sendable {
         logitNormalMean: Float = 0.0,
         logitNormalStd: Float = 1.0,
         fluxShiftValue: Float = 1.0,
+        // Loss weighting
+        lossWeighting: LossWeighting = .none,
         // Memory
         quantization: TrainingQuantization = .bf16,
         gradientCheckpointing: Bool = true,
@@ -445,6 +452,7 @@ public struct LoRATrainingConfig: Codable, Sendable {
         self.logitNormalMean = logitNormalMean
         self.logitNormalStd = logitNormalStd
         self.fluxShiftValue = fluxShiftValue
+        self.lossWeighting = lossWeighting
         self.quantization = quantization
         self.gradientCheckpointing = gradientCheckpointing
         self.cacheLatents = cacheLatents

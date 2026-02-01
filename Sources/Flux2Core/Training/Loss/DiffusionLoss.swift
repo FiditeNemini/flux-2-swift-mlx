@@ -18,18 +18,38 @@ public enum DiffusionLossType: String, Codable, Sendable {
 }
 
 /// Loss weighting scheme
-public enum LossWeighting: String, Codable, Sendable {
+public enum LossWeighting: String, Codable, Sendable, CaseIterable {
+    /// No weighting (uniform across timesteps) - alias for uniform
+    case none = "none"
+
     /// No weighting (uniform across timesteps)
     case uniform = "uniform"
-    
+
     /// Min-SNR weighting (better convergence)
     case minSNR = "min_snr"
-    
+
+    /// SNR weighting (alias for minSNR)
+    case snr = "snr"
+
     /// Cosine weighting
     case cosine = "cosine"
-    
+
     /// Sigmoid weighting
     case sigmoid = "sigmoid"
+
+    /// Bell-shaped weighting centered at t=500 (Ostris "weighted")
+    /// Middle timesteps get higher weight, early/late get lower
+    case bellShaped = "bell_shaped"
+
+    public var displayName: String {
+        switch self {
+        case .none, .uniform: return "None (uniform)"
+        case .minSNR, .snr: return "SNR weighting"
+        case .cosine: return "Cosine weighting"
+        case .sigmoid: return "Sigmoid weighting"
+        case .bellShaped: return "Bell-shaped (Ostris weighted)"
+        }
+    }
 }
 
 /// Diffusion loss calculator for LoRA training
@@ -104,21 +124,32 @@ public struct DiffusionLoss: Sendable {
         sigmas: MLXArray?
     ) -> MLXArray {
         switch weighting {
-        case .uniform:
+        case .none, .uniform:
             return MLXArray.ones([timesteps.shape[0]])
-            
-        case .minSNR:
+
+        case .minSNR, .snr:
             guard let sigmas = sigmas else {
                 return MLXArray.ones([timesteps.shape[0]])
             }
             return minSNRWeights(sigmas: sigmas)
-            
+
         case .cosine:
             return cosineWeights(timesteps: timesteps)
-            
+
         case .sigmoid:
             return sigmoidWeights(timesteps: timesteps)
+
+        case .bellShaped:
+            return bellShapedWeights(timesteps: timesteps)
         }
+    }
+
+    /// Bell-shaped weighting centered at t=500 (Ostris "weighted")
+    /// weight(t) = exp(-2 * ((t - 500) / 1000)^2)
+    private func bellShapedWeights(timesteps: MLXArray) -> MLXArray {
+        let t = timesteps.asType(.float32)
+        let centered = (t - 500.0) / 1000.0
+        return MLX.exp(-2.0 * centered * centered)
     }
     
     /// Min-SNR weighting: min(SNR, gamma) / SNR

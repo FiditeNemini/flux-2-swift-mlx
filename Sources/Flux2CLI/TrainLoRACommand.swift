@@ -103,6 +103,9 @@ struct TrainLoRA: AsyncParsableCommand {
     @Option(name: .long, help: "Flux shift value (for flux_shift sampling, default: 1.0)")
     var fluxShift: Float = 1.0
 
+    @Option(name: .long, help: "Loss weighting strategy: none, bell_shaped, snr")
+    var lossWeighting: String = "none"
+
     // MARK: - Memory Optimization Arguments
 
     @Flag(name: .long, help: "Enable gradient checkpointing (saves ~30-40% memory)")
@@ -281,6 +284,8 @@ struct TrainLoRA: AsyncParsableCommand {
             logitNormalMean: logitNormalMean,
             logitNormalStd: logitNormalStd,
             fluxShiftValue: fluxShift,
+            // Loss weighting
+            lossWeighting: parseLossWeighting(lossWeighting),
             // Memory
             quantization: quant,
             gradientCheckpointing: gradientCheckpointing,
@@ -592,6 +597,9 @@ struct TrainLoRA: AsyncParsableCommand {
             print("  Shift: \(config.fluxShiftValue)")
         }
         print()
+        print("Loss Weighting:")
+        print("  Strategy: \(config.lossWeighting.displayName)")
+        print()
         print("Weight Averaging:")
         print("  EMA: \(config.useEMA ? "enabled (decay=\(config.emaDecay))" : "disabled")")
         print()
@@ -641,5 +649,17 @@ private func parseTimestepSampling(_ input: String) -> TimestepSampling {
         return .style
     default:
         return .uniform
+    }
+}
+
+/// Parse loss weighting strategy string
+private func parseLossWeighting(_ input: String) -> LossWeighting {
+    switch input.lowercased() {
+    case "bell_shaped", "bell-shaped", "bellshaped", "weighted":
+        return .bellShaped
+    case "snr":
+        return .snr
+    default:
+        return .none
     }
 }

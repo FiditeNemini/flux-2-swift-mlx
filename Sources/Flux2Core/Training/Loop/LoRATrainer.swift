@@ -306,6 +306,7 @@ public final class LoRATrainer: @unchecked Sendable {
         // Create cached valueAndGrad function ONCE - this is critical for performance
         // Creating it inside trainStep() forces gradient graph reconstruction per call
         let usesGuidance = modelType.usesGuidanceEmbeds
+        let lossWeightingMode = config.lossWeighting
         func lossFunction(model: Flux2Transformer2DModel, arrays: [MLXArray]) -> [MLXArray] {
             // Input arrays order: [packedLatents, batchedHidden, timesteps, imgIds, txtIds, velocityTarget, guidance]
             let packedLatentsIn = arrays[0]
@@ -325,8 +326,66 @@ public final class LoRATrainer: @unchecked Sendable {
                 txtIds: txtIdsIn
             )
 
-            // MSE loss between predicted velocity and target velocity
-            let loss = mseLoss(predictions: modelOutput, targets: velocityTargetIn, reduction: .mean)
+            // Compute loss with optional weighting
+            let loss: MLXArray
+            switch lossWeightingMode {
+            case .none, .uniform:
+                // Standard MSE loss
+                loss = mseLoss(predictions: modelOutput, targets: velocityTargetIn, reduction: .mean)
+
+            case .bellShaped:
+                // Bell-shaped weighting centered at t=500 (Ostris "weighted")
+                // weight(t) = exp(-2 * ((t - 500) / 1000)^2)
+                // Normalized so mean weight ≈ 1
+                let t = timestepsIn  // Shape: [B]
+                let centered = (t - 500.0) / 1000.0
+                let weights = MLX.exp(-2.0 * centered * centered)
+                // Normalize weights so mean = 1 (preserves loss scale)
+                let normalizedWeights = weights / MLX.mean(weights)
+
+                // Compute per-sample MSE, then weight and average
+                // modelOutput and velocityTargetIn are [B, seq, features]
+                let squaredError = (modelOutput - velocityTargetIn) * (modelOutput - velocityTargetIn)
+                let perSampleMSE = MLX.mean(squaredError, axes: [1, 2])  // [B]
+                let weightedMSE = perSampleMSE * normalizedWeights
+                loss = MLX.mean(weightedMSE)
+
+            case .snr, .minSNR:
+                // SNR-based weighting: weight = 1 / (sigma^2 + 1)
+                // Higher weight for cleaner samples (low sigma)
+                let sigma = timestepsIn / 1000.0  // [B]
+                let weights = 1.0 / (sigma * sigma + 1.0)
+                let normalizedWeights = weights / MLX.mean(weights)
+
+                let squaredError = (modelOutput - velocityTargetIn) * (modelOutput - velocityTargetIn)
+                let perSampleMSE = MLX.mean(squaredError, axes: [1, 2])
+                let weightedMSE = perSampleMSE * normalizedWeights
+                loss = MLX.mean(weightedMSE)
+
+            case .cosine:
+                // Cosine weighting: cos(t * pi / 2)^2
+                let t = timestepsIn / 1000.0  // [B] normalized to [0, 1]
+                let cosWeights = MLX.cos(t * Float.pi / 2)
+                let weights = cosWeights * cosWeights
+                let normalizedWeights = weights / MLX.mean(weights)
+
+                let squaredError = (modelOutput - velocityTargetIn) * (modelOutput - velocityTargetIn)
+                let perSampleMSE = MLX.mean(squaredError, axes: [1, 2])
+                let weightedMSE = perSampleMSE * normalizedWeights
+                loss = MLX.mean(weightedMSE)
+
+            case .sigmoid:
+                // Sigmoid weighting: inverted sigmoid for higher weight at early timesteps
+                let t = (timestepsIn / 1000.0 - 0.5) * 10  // [B] normalized to [-5, 5]
+                let weights = MLX.sigmoid(-t)
+                let normalizedWeights = weights / MLX.mean(weights)
+
+                let squaredError = (modelOutput - velocityTargetIn) * (modelOutput - velocityTargetIn)
+                let perSampleMSE = MLX.mean(squaredError, axes: [1, 2])
+                let weightedMSE = perSampleMSE * normalizedWeights
+                loss = MLX.mean(weightedMSE)
+            }
+
             return [loss]
         }
         self.cachedLossAndGrad = valueAndGrad(model: transformer, lossFunction)
