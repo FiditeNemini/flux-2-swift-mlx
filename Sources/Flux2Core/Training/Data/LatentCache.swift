@@ -196,73 +196,90 @@ public final class LatentCache: @unchecked Sendable {
         progressCallback: ((Int, Int) -> Void)? = nil
     ) async throws -> Int {
         let total = dataset.count
-        
+
         Flux2Debug.log("[LatentCache] Pre-encoding \(total) images...")
-        
+
         // OPTIMIZATION 1: Pre-load list of cached files for O(1) lookup
         let cachedFilenames = loadCachedFilenameSet()
-        
-        // OPTIMIZATION 2: Collect uncached samples for batch encoding
-        var uncachedSamples: [(index: Int, sample: TrainingSample)] = []
+
+        // OPTIMIZATION 2: Collect uncached samples grouped by resolution for batch encoding
+        // Key: "widthxheight", Value: [(index, sample)]
+        var uncachedByResolution: [String: [(index: Int, sample: TrainingSample)]] = [:]
         var cachedCount = 0
-        
+
         for (index, sample) in dataset.enumerated() {
             let baseName = (sample.filename as NSString).deletingPathExtension
-            if cachedFilenames.contains(baseName) {
+            let width = sample.originalSize.width
+            let height = sample.originalSize.height
+            let resKey = "\(width)x\(height)"
+
+            // Check if already cached (with resolution suffix for bucketed caching)
+            let cacheFile = cacheFilePath(for: sample.filename, width: width, height: height)
+            if FileManager.default.fileExists(atPath: cacheFile.path) || cachedFilenames.contains(baseName) {
                 cachedCount += 1
                 progressCallback?(index + 1, total)
             } else {
-                uncachedSamples.append((index, sample))
+                uncachedByResolution[resKey, default: []].append((index, sample))
             }
         }
-        
-        Flux2Debug.log("[LatentCache] Found \(cachedCount) already cached, \(uncachedSamples.count) to encode")
-        
-        // OPTIMIZATION 3: Batch encode uncached images
+
+        let uncachedCount = uncachedByResolution.values.reduce(0) { $0 + $1.count }
+        Flux2Debug.log("[LatentCache] Found \(cachedCount) already cached, \(uncachedCount) to encode")
+        Flux2Debug.log("[LatentCache] Grouped into \(uncachedByResolution.count) resolution buckets")
+
+        // OPTIMIZATION 3: Batch encode by resolution group (same-size images can be stacked)
         let batchSize = Self.encodingBatchSize
-        for batchStart in stride(from: 0, to: uncachedSamples.count, by: batchSize) {
-            let batchEnd = min(batchStart + batchSize, uncachedSamples.count)
-            let batch = Array(uncachedSamples[batchStart..<batchEnd])
-            
-            // Stack images into batch [B, H, W, C]
-            var batchImages: [MLXArray] = []
-            var batchFilenames: [String] = []
-            
-            for (_, sample) in batch {
-                // Normalize to [-1, 1]
-                let normalizedImage = sample.image * 2.0 - 1.0
-                batchImages.append(normalizedImage)
-                batchFilenames.append(sample.filename)
+        for (resKey, samples) in uncachedByResolution {
+            Flux2Debug.log("[LatentCache] Encoding \(samples.count) images at resolution \(resKey)")
+
+            for batchStart in stride(from: 0, to: samples.count, by: batchSize) {
+                let batchEnd = min(batchStart + batchSize, samples.count)
+                let batch = Array(samples[batchStart..<batchEnd])
+
+                // Stack images into batch [B, H, W, C] - all same size now
+                var batchImages: [MLXArray] = []
+                var batchFilenames: [String] = []
+                var batchWidth = 0
+                var batchHeight = 0
+
+                for (_, sample) in batch {
+                    // Normalize to [-1, 1]
+                    let normalizedImage = sample.image * 2.0 - 1.0
+                    batchImages.append(normalizedImage)
+                    batchFilenames.append(sample.filename)
+                    batchWidth = sample.originalSize.width
+                    batchHeight = sample.originalSize.height
+                }
+
+                // Stack and transpose to NCHW [B, C, H, W]
+                let stackedImages = MLX.stacked(batchImages, axis: 0)
+                let nchwBatch = stackedImages.transposed(0, 3, 1, 2)
+
+                // Encode entire batch at once
+                let latentsBatch = vae.encode(nchwBatch)
+
+                // Ensure computation is done
+                eval(latentsBatch)
+
+                // Save each latent to cache with resolution
+                for (i, filename) in batchFilenames.enumerated() {
+                    let latent = latentsBatch[i]
+                    try saveLatent(latent, for: filename, width: batchWidth, height: batchHeight)
+                }
+
+                // Update progress for each item in batch
+                for (origIndex, _) in batch {
+                    progressCallback?(origIndex + 1, total)
+                }
+
+                // Clear GPU memory after each batch
+                MLX.Memory.clearCache()
             }
-            
-            // Stack and transpose to NCHW [B, C, H, W]
-            let stackedImages = MLX.stacked(batchImages, axis: 0)
-            let nchwBatch = stackedImages.transposed(0, 3, 1, 2)
-            
-            // Encode entire batch at once
-            let latentsBatch = vae.encode(nchwBatch)
-            
-            // Ensure computation is done
-            eval(latentsBatch)
-            
-            // Save each latent to cache
-            for (i, filename) in batchFilenames.enumerated() {
-                let latent = latentsBatch[i]
-                try saveLatent(latent, for: filename)
-            }
-            
-            // Update progress for each item in batch
-            for (origIndex, _) in batch {
-                progressCallback?(origIndex + 1, total)
-            }
-            
-            // Clear GPU memory after each batch
-            MLX.Memory.clearCache()
         }
-        
-        let totalEncoded = cachedCount + uncachedSamples.count
-        Flux2Debug.log("[LatentCache] Pre-encoded \(totalEncoded) latents (batched \(uncachedSamples.count) new)")
-        
+
+        let totalEncoded = cachedCount + uncachedCount
+        Flux2Debug.log("[LatentCache] Pre-encoded \(totalEncoded) latents (batched \(uncachedCount) new)")
+
         return totalEncoded
     }
     
