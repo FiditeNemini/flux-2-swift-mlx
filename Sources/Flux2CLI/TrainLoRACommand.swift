@@ -91,7 +91,7 @@ struct TrainLoRA: AsyncParsableCommand {
 
     // MARK: - Timestep Sampling Arguments
 
-    @Option(name: .long, help: "Timestep sampling strategy: uniform, logit_normal, flux_shift")
+    @Option(name: .long, help: "Timestep sampling: uniform, logit_normal, flux_shift, content, style")
     var timestepSampling: String = "uniform"
 
     @Option(name: .long, help: "Logit-normal mean (for logit_normal sampling, default: 0.0)")
@@ -635,6 +635,10 @@ private func parseTimestepSampling(_ input: String) -> TimestepSampling {
         return .logitNormal
     case "flux_shift", "flux-shift", "fluxshift":
         return .fluxShift
+    case "content":
+        return .content
+    case "style":
+        return .style
     default:
         return .uniform
     }

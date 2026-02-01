@@ -1524,6 +1524,25 @@ public final class LoRATrainer: @unchecked Sendable {
             let shifted = base + config.fluxShiftValue * 100  // Shift is in units of 100 timesteps
             // Clamp to valid range and convert to int
             return MLX.clip(shifted, min: 0, max: 999).asType(.int32)
+
+        case .content:
+            // Ostris content mode: t^3 distribution favors LOW timesteps
+            // Good for learning specific subjects (faces, objects)
+            // Low timesteps = late denoising = fine details
+            let u = MLXRandom.uniform(low: Float(0), high: Float(1), [batchSize])
+            let cubic = u * u * u  // t^3 concentrates near 0
+            let scaled = cubic * 1000.0
+            return MLX.clip(scaled, min: 0, max: 999).asType(.int32)
+
+        case .style:
+            // Ostris style mode: (1-t^3) distribution favors HIGH timesteps
+            // Good for learning artistic styles, compositions
+            // High timesteps = early denoising = global structure
+            let u = MLXRandom.uniform(low: Float(0), high: Float(1), [batchSize])
+            let cubic = u * u * u
+            let inverted = 1.0 - cubic  // (1-t^3) concentrates near 1
+            let scaled = inverted * 1000.0
+            return MLX.clip(scaled, min: 0, max: 999).asType(.int32)
         }
     }
 }

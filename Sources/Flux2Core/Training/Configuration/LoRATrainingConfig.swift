@@ -120,11 +120,21 @@ public enum TimestepSampling: String, Codable, Sendable, CaseIterable {
     /// Good for concepts that change the overall image structure
     case fluxShift = "flux_shift"
 
+    /// Content mode (Ostris) - cubic distribution favoring LOW timesteps
+    /// Best for learning specific subjects (faces, objects, characters)
+    case content = "content"
+
+    /// Style mode (Ostris) - cubic distribution favoring HIGH timesteps
+    /// Best for learning artistic styles, textures, compositions
+    case style = "style"
+
     public var displayName: String {
         switch self {
         case .uniform: return "Uniform (default)"
         case .logitNormal: return "Logit-Normal (detail focus)"
         case .fluxShift: return "Flux Shift (composition focus)"
+        case .content: return "Content (subject/face focus)"
+        case .style: return "Style (artistic style focus)"
         }
     }
 }
