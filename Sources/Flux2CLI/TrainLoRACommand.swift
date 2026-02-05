@@ -443,7 +443,7 @@ struct TrainLoRA: AsyncParsableCommand {
     private func loadTextEncoder(
         for model: Flux2Model,
         quantization: TrainingQuantization
-    ) async throws -> KleinTextEncoder {
+    ) async throws -> any TrainingTextEncoder {
         // Map training quantization to Mistral quantization for text encoder
         let mistralQuant: MistralQuantization
         switch quantization {
@@ -455,22 +455,27 @@ struct TrainLoRA: AsyncParsableCommand {
             mistralQuant = .mlx4bit
         }
 
-        // For Klein models, use KleinTextEncoder
-        // For Dev, would need to use T5/CLIP (not implemented here)
-        let variant: KleinVariant
         switch model {
         case .klein4B:
-            variant = .klein4B
+            // Klein 4B uses Qwen3-4B
+            let encoder = KleinTextEncoder(variant: .klein4B, quantization: mistralQuant)
+            try await encoder.load()
+            return encoder
+
         case .klein9B:
-            variant = .klein9B
+            // Klein 9B uses Qwen3-8B
+            let encoder = KleinTextEncoder(variant: .klein9B, quantization: mistralQuant)
+            try await encoder.load()
+            return encoder
+
         case .dev:
-            throw ValidationError("Dev model training not yet supported. Use Klein 4B or 9B.")
+            // Dev uses Mistral Small 3.2 (24B)
+            // Note: For Dev training, we recommend using 8-bit quantization
+            // bf16 requires ~48GB just for the text encoder
+            let encoder = DevTextEncoder(quantization: mistralQuant)
+            try await encoder.load()
+            return encoder
         }
-
-        let encoder = KleinTextEncoder(variant: variant, quantization: mistralQuant)
-        try await encoder.load()
-
-        return encoder
     }
 
     /// Load transformer for LoRA training
@@ -482,10 +487,11 @@ struct TrainLoRA: AsyncParsableCommand {
             throw ValidationError("""
                 LoRA training is not supported for \(model.displayName).
                 No base (non-distilled) model is available for this model type.
-                
+
                 Currently supported for LoRA training:
                 - Klein 4B (bf16 base model)
-                - Dev (already non-distilled)
+                - Klein 9B (bf16 base model)
+                - Dev (32B, already non-distilled)
                 """)
         }
         
@@ -783,7 +789,7 @@ struct TrainLoRA: AsyncParsableCommand {
         let uniqueCaptions = Set(dataset.allCaptions)
 
         for caption in uniqueCaptions {
-            let embedding = try textEncoder.encode(caption)
+            let embedding = try textEncoder.encodeForTraining(caption)
             cachedEmbeddings[caption] = CachedEmbeddingEntry(
                 caption: caption,
                 embedding: embedding
@@ -818,7 +824,7 @@ struct TrainLoRA: AsyncParsableCommand {
             cachedEmbeddings: embeddingsByFilename,
             vae: vae,
             textEncoder: { prompt in
-                try textEncoder.encode(prompt)
+                try textEncoder.encodeForTraining(prompt)
             },
             startStep: startStep,
             optimizerState: optimizerStateURL

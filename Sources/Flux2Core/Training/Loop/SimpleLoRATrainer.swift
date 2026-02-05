@@ -673,9 +673,12 @@ public final class SimpleLoRATrainer {
         let velocityTarget = noise - batchedLatent
         let packedVelocityTarget = packLatentsForTransformer(velocityTarget, patchSize: 2)
         
-        // Guidance embedding (Flux.2 Klein uses guidance)
+        // Guidance embedding (Dev model uses guidance, Klein models do NOT)
+        // IMPORTANT: For training, use guidance_scale=1.0 (not 4.0 used in inference)
+        // This is because Dev is guidance-distilled - training at scale=1.0 keeps the LoRA
+        // from interfering with the baked-in guidance behavior (ref: Ostris ai-toolkit)
         let guidance: MLXArray? = modelType.usesGuidanceEmbeds ?
-            MLXArray.full([batchSize], values: MLXArray(Float(4.0))) : nil
+            MLXArray.full([batchSize], values: MLXArray(Float(1.0))) : nil
         
         // Prepare input arrays
         // CRITICAL: Pass sigmas (in [0, 1] range), NOT timesteps (in [0, 1000] range)!
