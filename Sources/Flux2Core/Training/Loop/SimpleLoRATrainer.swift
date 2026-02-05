@@ -1570,9 +1570,11 @@ public final class SimpleLoRATrainer {
         let maxStep = Float(lossHistory.last!.step)
         let stepRange = max(maxStep - minStep, 1)
 
-        let allLosses = smoothedLoss.map { $0.loss }
-        let minLoss = allLosses.min() ?? 0
-        let maxLoss = allLosses.max() ?? 1
+        // Use raw loss values for scaling (they have larger range than smoothed)
+        // This ensures raw data points don't go outside the plot area
+        let rawLosses = lossHistory.map { $0.loss }
+        let minLoss = rawLosses.min() ?? 0
+        let maxLoss = rawLosses.max() ?? 1
         let lossRange = max(maxLoss - minLoss, 0.001)
 
         // Add 10% padding to loss range
