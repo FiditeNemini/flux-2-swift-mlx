@@ -810,8 +810,11 @@ struct TrainLoRA: AsyncParsableCommand {
             }
         }
 
-        // Create trainer
-        let trainer = SimpleLoRATrainer(config: simpleConfig, modelType: model)
+        // Create training controller for pause/resume/stop support
+        let controller = TrainingController(outputDirectory: simpleConfig.outputDir)
+
+        // Create trainer with controller
+        let trainer = SimpleLoRATrainer(config: simpleConfig, modelType: model, controller: controller)
 
         // Delete pause checkpoint now that everything is loaded and ready
         // This prevents disk saturation from accumulating pause checkpoints
