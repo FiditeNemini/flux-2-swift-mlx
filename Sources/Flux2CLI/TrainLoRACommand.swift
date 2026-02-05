@@ -291,10 +291,6 @@ struct TrainLoRA: AsyncParsableCommand {
                 throw ValidationError("Output path is required. Use --output or --config with checkpoints.output")
             }
             let outputURL = URL(fileURLWithPath: outputArg)
-            let outputDir = outputURL.deletingLastPathComponent()
-            guard FileManager.default.fileExists(atPath: outputDir.path) else {
-                throw ValidationError("Output directory not found: \(outputDir.path)")
-            }
 
             // Create validation dataset URL if provided
             let validationDatasetURL = validationDataset.map { URL(fileURLWithPath: $0) }

@@ -710,10 +710,9 @@ public struct LoRATrainingConfig: Codable, Sendable {
             throw LoRATrainingConfigError.invalidImageSize(imageSize)
         }
         
-        // Check output directory parent exists
-        let outputDir = outputPath.deletingLastPathComponent()
-        guard FileManager.default.fileExists(atPath: outputDir.path) else {
-            throw LoRATrainingConfigError.outputDirectoryNotFound(outputDir)
+        // Create output directory if it doesn't exist
+        if !FileManager.default.fileExists(atPath: outputPath.path) {
+            try FileManager.default.createDirectory(at: outputPath, withIntermediateDirectories: true)
         }
     }
     
