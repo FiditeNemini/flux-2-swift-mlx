@@ -86,6 +86,9 @@ struct TextToImage: AsyncParsableCommand {
     @Option(name: .long, help: "LoRA config JSON file (alternative to --lora, includes scheduler overrides)")
     var loraConfigPath: String?
 
+    @Option(name: .long, help: "Memory profile: auto (default), conservative, balanced, performance")
+    var memoryProfile: String = "auto"
+
     func run() async throws {
         // Configure debug logging
         if debug {
@@ -222,6 +225,16 @@ struct TextToImage: AsyncParsableCommand {
 
         // Create pipeline
         let pipeline = Flux2Pipeline(model: modelVariant, quantization: quantConfig)
+
+        // Set memory profile
+        switch memoryProfile.lowercased() {
+        case "conservative": pipeline.memoryProfile = .conservative
+        case "balanced": pipeline.memoryProfile = .balanced
+        case "performance": pipeline.memoryProfile = .performance
+        case "auto": pipeline.memoryProfile = .auto
+        default:
+            throw ValidationError("Invalid memory profile: \(memoryProfile). Use auto, conservative, balanced, or performance")
+        }
 
         // Load LoRA if specified
         if let loraConfig = loraConfig {
@@ -377,6 +390,9 @@ struct ImageToImage: AsyncParsableCommand {
     @Option(name: .long, help: "LoRA config JSON file (alternative to --lora, includes scheduler overrides)")
     var loraConfigPath: String?
 
+    @Option(name: .long, help: "Memory profile: auto (default), conservative, balanced, performance")
+    var memoryProfile: String = "auto"
+
     func run() async throws {
         let startTime = Date()
 
@@ -520,6 +536,16 @@ struct ImageToImage: AsyncParsableCommand {
 
         // Create pipeline
         let pipeline = Flux2Pipeline(model: modelVariant, quantization: quantConfig)
+
+        // Set memory profile
+        switch memoryProfile.lowercased() {
+        case "conservative": pipeline.memoryProfile = .conservative
+        case "balanced": pipeline.memoryProfile = .balanced
+        case "performance": pipeline.memoryProfile = .performance
+        case "auto": pipeline.memoryProfile = .auto
+        default:
+            throw ValidationError("Invalid memory profile: \(memoryProfile). Use auto, conservative, balanced, or performance")
+        }
 
         // Load LoRA if specified
         if let loraConfig = loraConfig {
