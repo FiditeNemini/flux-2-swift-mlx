@@ -29,6 +29,8 @@ training:
 loss:
   timestep_sampling: balanced  # 50/50 content/style mix
   weighting: bell_shaped       # Focus on medium noise levels
+  diff_output_preservation: true
+  diff_output_preservation_class: "illustration"
 
 checkpoints:
   output: ./output/klein9b-tarot-lora

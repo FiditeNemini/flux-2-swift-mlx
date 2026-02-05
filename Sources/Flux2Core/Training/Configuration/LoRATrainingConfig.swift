@@ -467,8 +467,8 @@ public struct LoRATrainingConfig: Codable, Sendable {
         fluxShiftValue: Float = 1.0,
         // Loss weighting
         lossWeighting: LossWeighting = .none,
-        // Differential Output Preservation
-        diffOutputPreservation: Bool = false,
+        // Differential Output Preservation (prevents style bleeding without trigger word)
+        diffOutputPreservation: Bool = true,  // Enabled by default when trigger_word is set
         diffOutputPreservationClass: String? = nil,
         diffOutputPreservationMultiplier: Float = 1.0,
         diffOutputPreservationEveryNSteps: Int = 1,  // Optimization: 1=every step, 2=every 2nd, etc.

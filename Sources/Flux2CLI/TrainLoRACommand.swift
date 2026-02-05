@@ -712,11 +712,16 @@ struct TrainLoRA: AsyncParsableCommand {
 
         // DOP (Differential Output Preservation) settings
         // This is critical for preventing LoRA from overstrengthening
-        simpleConfig.dopEnabled = config.diffOutputPreservation
-        simpleConfig.dopMultiplier = config.diffOutputPreservationMultiplier
-        simpleConfig.dopPreservationClass = config.diffOutputPreservationClass ?? "person"
+        // Auto-enable DOP when trigger_word is set (unless explicitly disabled)
         simpleConfig.triggerWord = config.triggerWord
-        simpleConfig.dopEveryNSteps = config.diffOutputPreservationEveryNSteps ?? 1  // Default: every step
+        if config.triggerWord != nil && config.diffOutputPreservation {
+            simpleConfig.dopEnabled = true
+            simpleConfig.dopMultiplier = config.diffOutputPreservationMultiplier
+            simpleConfig.dopPreservationClass = config.diffOutputPreservationClass ?? "object"
+            simpleConfig.dopEveryNSteps = config.diffOutputPreservationEveryNSteps
+        } else {
+            simpleConfig.dopEnabled = false
+        }
         simpleConfig.gradientAccumulationSteps = config.gradientAccumulationSteps
 
         // Learning curve visualization

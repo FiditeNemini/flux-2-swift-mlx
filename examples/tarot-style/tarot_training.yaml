@@ -29,6 +29,10 @@ training:
 loss:
   timestep_sampling: balanced  # 50/50 content/style mix
   weighting: bell_shaped       # Focus on medium noise levels
+  # DOP (Differential Output Preservation) - prevents style bleeding without trigger
+  diff_output_preservation: true
+  diff_output_preservation_class: "illustration"  # Replace trigger with this for preservation
+  diff_output_preservation_multiplier: 1.0        # Strength of preservation regularization
 
 checkpoints:
   output: ./output/tarot-lora
