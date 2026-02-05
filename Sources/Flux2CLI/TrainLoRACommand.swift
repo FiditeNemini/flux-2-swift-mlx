@@ -810,6 +810,9 @@ struct TrainLoRA: AsyncParsableCommand {
             }
         }
 
+        // Clean up leftover control files from previous run
+        TrainingController.cleanupControlFiles(outputDir: simpleConfig.outputDir)
+
         // Create training controller for pause/resume/stop support
         let controller = TrainingController(outputDirectory: simpleConfig.outputDir)
 

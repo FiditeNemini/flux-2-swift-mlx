@@ -366,4 +366,27 @@ extension TrainingController {
         print("Created stop signal: \(stopFile.path)")
         print("Training will stop after the current step and save a checkpoint.")
     }
+
+    /// Clean up leftover control files from previous runs
+    /// Call this when explicitly starting/resuming training
+    public static func cleanupControlFiles(outputDir: URL) {
+        let pauseFile = outputDir.appendingPathComponent(".pause")
+        let stopFile = outputDir.appendingPathComponent(".stop")
+
+        var cleaned: [String] = []
+
+        if FileManager.default.fileExists(atPath: pauseFile.path) {
+            try? FileManager.default.removeItem(atPath: pauseFile.path)
+            cleaned.append(".pause")
+        }
+
+        if FileManager.default.fileExists(atPath: stopFile.path) {
+            try? FileManager.default.removeItem(atPath: stopFile.path)
+            cleaned.append(".stop")
+        }
+
+        if !cleaned.isEmpty {
+            print("🧹 Cleaned up control files from previous run: \(cleaned.joined(separator: ", "))")
+        }
+    }
 }
