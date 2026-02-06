@@ -723,6 +723,7 @@ struct TrainLoRA: AsyncParsableCommand {
             simpleConfig.dopEnabled = false
         }
         simpleConfig.gradientAccumulationSteps = config.gradientAccumulationSteps
+        simpleConfig.gradientCheckpointing = config.gradientCheckpointing
 
         // Learning curve visualization
         simpleConfig.generateLearningCurve = config.generateLearningCurve

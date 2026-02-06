@@ -38,6 +38,9 @@ public struct SimpleLoRAConfig: Sendable {
     // Gradient accumulation (simulate larger batch size)
     public var gradientAccumulationSteps: Int = 1  // 1 = no accumulation, 2+ = accumulate
 
+    // Memory optimization
+    public var gradientCheckpointing: Bool = false  // Wrap forward pass with checkpoint() to save memory
+
     // Checkpointing
     public var saveEveryNSteps: Int = 250
     public var logEveryNSteps: Int = 1
@@ -342,7 +345,16 @@ public final class SimpleLoRATrainer {
         // Create cached valueAndGrad function
         let usesGuidance = modelType.usesGuidanceEmbeds
         let lossWeightingMode = config.lossWeighting
-        
+        let useGradientCheckpointing = config.gradientCheckpointing
+
+        // Note: gradient_checkpointing config exists but is NOT YET IMPLEMENTED
+        // The naive approach of wrapping forward pass breaks gradient flow.
+        // Proper implementation requires layer-wise checkpointing in the transformer itself.
+        if useGradientCheckpointing {
+            print("  ⚠️  Gradient checkpointing: NOT YET IMPLEMENTED (config ignored)")
+            print("      Klein 9B + DOP requires layer-wise checkpointing in transformer")
+        }
+
         func lossFunction(model: Flux2Transformer2DModel, arrays: [MLXArray]) -> [MLXArray] {
             // Input arrays: [packedLatents, hidden, timesteps, imgIds, txtIds, velocityTarget, guidance]
             let packedLatentsIn = arrays[0]
@@ -352,7 +364,7 @@ public final class SimpleLoRATrainer {
             let txtIdsIn = arrays[4]
             let velocityTargetIn = arrays[5]
             let guidanceIn: MLXArray? = usesGuidance ? arrays[6] : nil
-            
+
             let modelOutput = model(
                 hiddenStates: packedLatentsIn,
                 encoderHiddenStates: hiddenIn,
@@ -446,7 +458,7 @@ public final class SimpleLoRATrainer {
                 let txtIdsIn = arrays[4]
                 let baseOutputIn = arrays[5]  // Pre-computed base model output
                 let guidanceIn: MLXArray? = usesGuidance ? arrays[6] : nil
-                
+
                 // Forward pass with LoRA enabled
                 let loraOutput = model(
                     hiddenStates: packedLatentsIn,
@@ -456,10 +468,10 @@ public final class SimpleLoRATrainer {
                     imgIds: imgIdsIn,
                     txtIds: txtIdsIn
                 )
-                
+
                 // DOP loss: LoRA should match base when trigger is not present
                 let dopLoss = mseLoss(predictions: loraOutput, targets: baseOutputIn, reduction: .mean)
-                
+
                 return [dopLoss]
             }
             
