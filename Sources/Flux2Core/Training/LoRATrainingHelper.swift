@@ -273,6 +273,87 @@ public final class LoRATrainingHelper: @unchecked Sendable {
     }
 }
 
+// MARK: - Transformer Loading for Training
+
+extension LoRATrainingHelper {
+
+    /// Load transformer optimized for training
+    ///
+    /// This method loads the transformer with aggressive memory optimization
+    /// settings required for training. Without these settings, the backward
+    /// pass can cause memory to explode (100GB+).
+    ///
+    /// - Parameters:
+    ///   - modelType: The model to load
+    ///   - weightsPath: Path to model weights
+    /// - Returns: Transformer configured for training
+    public func loadTransformerForTraining(
+        modelType: Flux2Model,
+        weightsPath: URL
+    ) async throws -> Flux2Transformer2DModel {
+
+        // Get the training variant (base model for Klein)
+        let variant = modelType.trainingVariant
+
+        // Create transformer with AGGRESSIVE memory optimization
+        // This is CRITICAL for training - without it, memory explodes
+        let transformer = Flux2Transformer2DModel(
+            config: variant.transformerConfig,
+            memoryOptimization: .aggressive  // evalEvery: 4, clearCache: true
+        )
+
+        Flux2Debug.log("[LoRATrainingHelper] Loading transformer with aggressive memory optimization")
+
+        // Load weights
+        let weights = try Flux2WeightLoader.loadWeights(from: weightsPath)
+        try Flux2WeightLoader.applyTransformerWeights(weights, to: transformer)
+
+        // Force evaluation to materialize weights
+        eval(transformer.parameters())
+
+        // Clear cache after loading
+        MLX.Memory.clearCache()
+
+        Flux2Debug.log("[LoRATrainingHelper] Transformer loaded: \(variant.displayName)")
+
+        return transformer
+    }
+
+    /// Load transformer for training with auto-download
+    ///
+    /// Downloads the model if not present, then loads with training optimizations.
+    ///
+    /// - Parameters:
+    ///   - modelType: The model to load
+    ///   - progressCallback: Download progress callback
+    /// - Returns: Transformer configured for training
+    public func loadTransformerForTraining(
+        modelType: Flux2Model,
+        progressCallback: (@Sendable (Double, String) -> Void)? = nil
+    ) async throws -> Flux2Transformer2DModel {
+
+        // Get the TransformerVariant for training (base model)
+        guard let variant = ModelRegistry.TransformerVariant.trainingVariant(for: modelType) else {
+            throw LoRATrainingHelperError.failedToEncode("No training variant available for \(modelType)")
+        }
+
+        // Check if downloaded, download if needed
+        var modelPath = Flux2ModelDownloader.findModelPath(for: .transformer(variant))
+
+        if modelPath == nil {
+            Flux2Debug.log("[LoRATrainingHelper] Downloading transformer...")
+            let downloader = Flux2ModelDownloader()
+            modelPath = try await downloader.download(.transformer(variant), progress: progressCallback)
+        }
+
+        guard let path = modelPath else {
+            throw LoRATrainingHelperError.failedToEncode("Failed to find or download transformer")
+        }
+
+        return try await loadTransformerForTraining(modelType: modelType, weightsPath: path)
+    }
+}
+
 // MARK: - Memory-Optimized Preparation
 
 extension LoRATrainingHelper {
