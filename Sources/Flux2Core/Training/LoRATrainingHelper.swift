@@ -19,11 +19,56 @@ import AppKit
 /// - Text embedding encoding
 /// - Text encoder closure with auto-reload for DOP
 ///
-/// ## Usage
+/// ## Memory-Optimized Usage (Recommended)
+///
+/// For large models (Klein 4B/9B, Dev), use the memory-optimized flow
+/// that loads models sequentially and unloads each after use:
+///
 /// ```swift
 /// let helper = LoRATrainingHelper()
 ///
-/// // Prepare training data from raw images
+/// // 1. Prepare data - VAE and textEncoder are loaded, used, then UNLOADED
+/// let (latents, embeddings) = try await helper.prepareTrainingDataMemoryOptimized(
+///     images: myImages,
+///     vaeLoader: { try await loadVAE() },
+///     textEncoderLoader: { try await loadTextEncoder() },
+///     triggerWord: "xyz_cat"
+/// )
+///
+/// // 2. Load transformer (now only transformer in memory)
+/// let transformer = try await helper.loadTransformerForTraining(modelType: .klein4B)
+///
+/// // 3. Create lazy text encoder for DOP (loads only when needed)
+/// let textEncoderClosure = config.dopEnabled
+///     ? helper.createLazyTextEncoderClosure(loader: { try await loadTextEncoder() })
+///     : nil
+///
+/// // 4. Start training
+/// // IMPORTANT: Don't pass VAE - it's not used after latent encoding!
+/// try await session.start(
+///     config: config,
+///     modelType: .klein4B,
+///     transformer: transformer,
+///     cachedLatents: latents,
+///     cachedEmbeddings: embeddings,
+///     vae: nil,  // VAE is NOT needed!
+///     textEncoder: textEncoderClosure
+/// )
+/// ```
+///
+/// ## Simple Usage (High Memory)
+///
+/// For smaller models or systems with plenty of memory:
+///
+/// ```swift
+/// let helper = LoRATrainingHelper()
+///
+/// // Load all models at once
+/// let vae = try await loadVAE()
+/// let textEncoder = try await loadTextEncoder()
+/// let transformer = try await loadTransformer()
+///
+/// // Prepare training data
 /// let (latents, embeddings) = try await helper.prepareTrainingData(
 ///     images: myImages,
 ///     vae: vae,
@@ -31,18 +76,8 @@ import AppKit
 ///     triggerWord: "xyz_cat"
 /// )
 ///
-/// // Get text encoder closure for DOP (handles reload after baseline)
-/// let textEncoderClosure = helper.createTextEncoderClosure(textEncoder: textEncoder)
-///
 /// // Start training
-/// try await session.start(
-///     config: config,
-///     modelType: .klein4B,
-///     transformer: transformer,
-///     cachedLatents: latents,
-///     cachedEmbeddings: embeddings,
-///     textEncoder: textEncoderClosure
-/// )
+/// try await session.start(...)
 /// ```
 public final class LoRATrainingHelper: @unchecked Sendable {
 
@@ -164,6 +199,64 @@ public final class LoRATrainingHelper: @unchecked Sendable {
                 try await textEncoder.load()
             }
             return try textEncoder.encodeForTraining(prompt)
+        }
+    }
+
+    /// Create a lazy text encoder closure for memory-optimized training
+    ///
+    /// This closure loads the text encoder on-demand when DOP needs it.
+    /// Use this with `prepareTrainingDataMemoryOptimized()` to minimize memory usage.
+    ///
+    /// ## Memory-Optimized Training Flow
+    /// ```swift
+    /// let helper = LoRATrainingHelper()
+    ///
+    /// // 1. Prepare data with sequential loading (VAE and textEncoder unloaded after)
+    /// let (latents, embeddings) = try await helper.prepareTrainingDataMemoryOptimized(
+    ///     images: images,
+    ///     vaeLoader: { try await loadVAE() },
+    ///     textEncoderLoader: { try await loadTextEncoder() },
+    ///     triggerWord: "xyz_cat"
+    /// )
+    ///
+    /// // 2. Load transformer (now only transformer is in memory)
+    /// let transformer = try await helper.loadTransformerForTraining(modelType: .klein4B)
+    ///
+    /// // 3. Create lazy text encoder closure for DOP (loads on-demand)
+    /// let textEncoderClosure = helper.createLazyTextEncoderClosure(
+    ///     loader: { try await loadTextEncoder() }
+    /// )
+    ///
+    /// // 4. Start training - don't pass VAE (it's not used!)
+    /// try await session.start(
+    ///     config: config,
+    ///     modelType: .klein4B,
+    ///     transformer: transformer,
+    ///     cachedLatents: latents,
+    ///     cachedEmbeddings: embeddings,
+    ///     vae: nil,  // VAE is NOT needed after latent encoding!
+    ///     textEncoder: textEncoderClosure
+    /// )
+    /// ```
+    ///
+    /// - Parameter loader: Closure that loads and returns a text encoder
+    /// - Returns: Closure suitable for passing to TrainingSession.start()
+    public func createLazyTextEncoderClosure(
+        loader: @escaping () async throws -> TrainingTextEncoder
+    ) -> ((String) async throws -> MLXArray) {
+        // Weak reference to avoid holding the encoder in memory when not needed
+        var cachedEncoder: TrainingTextEncoder?
+
+        return { prompt in
+            // Load encoder if not cached or unloaded
+            if cachedEncoder == nil || !cachedEncoder!.isLoaded {
+                Flux2Debug.log("[LoRATrainingHelper] Lazy loading text encoder for DOP...")
+                cachedEncoder = try await loader()
+                if !cachedEncoder!.isLoaded {
+                    try await cachedEncoder!.load()
+                }
+            }
+            return try cachedEncoder!.encodeForTraining(prompt)
         }
     }
 

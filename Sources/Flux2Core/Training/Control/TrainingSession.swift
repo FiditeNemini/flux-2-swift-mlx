@@ -82,14 +82,23 @@ public final class TrainingSession: @unchecked Sendable {
     // MARK: - Training Control
 
     /// Start or resume training
+    ///
+    /// ## Memory Optimization
+    /// For minimal memory usage, use `LoRATrainingHelper.prepareTrainingDataMemoryOptimized()`
+    /// which loads models sequentially and unloads each after use.
+    ///
+    /// **Important:** The `vae` parameter is deprecated and NOT used. Pass `nil` to save memory.
+    /// Latents should already be pre-encoded before calling this method.
+    ///
     /// - Parameters:
     ///   - config: Training configuration
     ///   - modelType: Model to train
     ///   - resumeMode: How to handle existing checkpoints
-    ///   - transformer: Pre-loaded transformer (optional, will load if nil)
-    ///   - cachedLatents: Pre-cached latents
-    ///   - cachedEmbeddings: Pre-cached embeddings
-    ///   - textEncoder: Text encoder function for DOP
+    ///   - transformer: Pre-loaded transformer with aggressive memory optimization
+    ///   - cachedLatents: Pre-cached latents (already encoded with VAE)
+    ///   - cachedEmbeddings: Pre-cached embeddings (already encoded with text encoder)
+    ///   - vae: **DEPRECATED** - Not used, pass nil to save memory
+    ///   - textEncoder: Text encoder closure for DOP (only needed if DOP is enabled)
     public func start(
         config: SimpleLoRAConfig,
         modelType: Flux2Model,
@@ -97,7 +106,7 @@ public final class TrainingSession: @unchecked Sendable {
         transformer: Flux2Transformer2DModel,
         cachedLatents: [CachedLatentEntry],
         cachedEmbeddings: [String: CachedEmbeddingEntry],
-        vae: AutoencoderKLFlux2? = nil,
+        vae: AutoencoderKLFlux2? = nil,  // DEPRECATED: Not used, pass nil
         textEncoder: ((String) async throws -> MLXArray)? = nil
     ) async throws {
 

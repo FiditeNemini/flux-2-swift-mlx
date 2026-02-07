@@ -493,6 +493,15 @@ public final class SimpleLoRATrainer {
             print()
         }
         
+        // CRITICAL: Force memory cleanup before training loop
+        // This ensures no lazy computation graphs are pending and frees GPU cache
+        print("Preparing memory for training...")
+        eval(transformer.trainableParameters())  // Materialize all LoRA parameters
+        eval(cachedLatents.map { $0.latent })    // Materialize all latents
+        eval(cachedEmbeddings.values.map { $0.embedding })  // Materialize all embeddings
+        MLX.Memory.clearCache()
+        Flux2Debug.log("[SimpleLoRATrainer] Memory prepared, cache cleared")
+
         print("Starting training...")
         if config.gradientAccumulationSteps > 1 {
             print("  Gradient accumulation: \(config.gradientAccumulationSteps) steps (effective batch = \(config.batchSize * config.gradientAccumulationSteps))")
