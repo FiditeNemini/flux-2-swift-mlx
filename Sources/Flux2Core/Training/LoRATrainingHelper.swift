@@ -128,6 +128,7 @@ public final class LoRATrainingHelper: @unchecked Sendable {
     ///
     /// This method handles all the complexity of:
     /// - Resizing images to valid dimensions (divisible by 16)
+    /// - Limiting resolution to prevent OOM during training (if maxResolution set)
     /// - Encoding with VAE
     /// - Calculating correct dimensions from latent shapes
     /// - Encoding text captions
@@ -137,6 +138,9 @@ public final class LoRATrainingHelper: @unchecked Sendable {
     ///   - vae: VAE encoder for latent encoding
     ///   - textEncoder: Text encoder for caption encoding
     ///   - triggerWord: Optional trigger word to prepend to captions
+    ///   - maxResolution: Optional maximum resolution (e.g., 768). Images larger than this are
+    ///                    scaled down while preserving aspect ratio. HIGHLY RECOMMENDED to prevent
+    ///                    OOM during training backprop. CLI uses 768 by default.
     ///   - progressCallback: Optional callback for progress updates (current, total)
     /// - Returns: Tuple of cached latents and embeddings ready for training
     public func prepareTrainingData(
@@ -144,6 +148,7 @@ public final class LoRATrainingHelper: @unchecked Sendable {
         vae: AutoencoderKLFlux2,
         textEncoder: TrainingTextEncoder,
         triggerWord: String? = nil,
+        maxResolution: Int? = nil,
         progressCallback: ((Int, Int) -> Void)? = nil
     ) async throws -> (latents: [CachedLatentEntry], embeddings: [String: CachedEmbeddingEntry]) {
 
@@ -153,8 +158,8 @@ public final class LoRATrainingHelper: @unchecked Sendable {
         let total = images.count
 
         for (index, trainingImage) in images.enumerated() {
-            // 1. Resize to valid dimensions (divisible by 16)
-            let resizedImage = resizeToValidDimensions(trainingImage.image)
+            // 1. Resize to valid dimensions (divisible by 16) with optional max resolution
+            let resizedImage = resizeToValidDimensions(trainingImage.image, maxResolution: maxResolution)
 
             // 2. Convert to MLXArray and encode with VAE
             let imageArray = cgImageToMLXArray(resizedImage)
@@ -285,11 +290,24 @@ public final class LoRATrainingHelper: @unchecked Sendable {
     /// - Patchify requires latent dimensions divisible by 2
     /// - Combined: image dimensions must be divisible by 16
     ///
-    /// - Parameter image: Original image
+    /// - Parameters:
+    ///   - image: Original image
+    ///   - maxResolution: Optional maximum resolution (e.g., 768 for bucketing).
+    ///                    If set, image is scaled down to fit within this limit while preserving aspect ratio.
+    ///                    This is CRITICAL for training memory - 1024x1024 causes OOM during backprop!
     /// - Returns: Resized image with valid dimensions
-    public func resizeToValidDimensions(_ image: CGImage) -> CGImage {
-        let originalWidth = image.width
-        let originalHeight = image.height
+    public func resizeToValidDimensions(_ image: CGImage, maxResolution: Int? = nil) -> CGImage {
+        var originalWidth = image.width
+        var originalHeight = image.height
+
+        // Apply max resolution limit (like CLI bucketing)
+        // This prevents OOM during training backprop with large images
+        if let maxRes = maxResolution, (originalWidth > maxRes || originalHeight > maxRes) {
+            let scale = min(Double(maxRes) / Double(originalWidth),
+                           Double(maxRes) / Double(originalHeight))
+            originalWidth = Int(Double(originalWidth) * scale)
+            originalHeight = Int(Double(originalHeight) * scale)
+        }
 
         // Round down to nearest multiple of 16
         let validWidth = (originalWidth / 16) * 16
@@ -300,7 +318,7 @@ public final class LoRATrainingHelper: @unchecked Sendable {
         let targetHeight = max(validHeight, 256)
 
         // If already valid, return original
-        if targetWidth == originalWidth && targetHeight == originalHeight {
+        if targetWidth == image.width && targetHeight == image.height {
             return image
         }
 
@@ -481,6 +499,9 @@ extension LoRATrainingHelper {
     ///   - vaeLoader: Closure that loads and returns the VAE
     ///   - textEncoderLoader: Closure that loads and returns the text encoder
     ///   - triggerWord: Optional trigger word
+    ///   - maxResolution: Optional maximum resolution (e.g., 768). Images larger than this are
+    ///                    scaled down while preserving aspect ratio. HIGHLY RECOMMENDED to prevent
+    ///                    OOM during training backprop. CLI uses 768 by default.
     ///   - progressCallback: Progress callback (phase, current, total)
     /// - Returns: Tuple of cached latents and embeddings
     public func prepareTrainingDataMemoryOptimized(
@@ -488,6 +509,7 @@ extension LoRATrainingHelper {
         vaeLoader: @Sendable @escaping () async throws -> AutoencoderKLFlux2,
         textEncoderLoader: @Sendable @escaping () async throws -> TrainingTextEncoder,
         triggerWord: String? = nil,
+        maxResolution: Int? = nil,
         progressCallback: (@Sendable (String, Int, Int) -> Void)? = nil
     ) async throws -> (latents: [CachedLatentEntry], embeddings: [String: CachedEmbeddingEntry]) {
 
@@ -506,8 +528,8 @@ extension LoRATrainingHelper {
         progressCallback?("Encoding latents", 0, total)
 
         for (index, trainingImage) in images.enumerated() {
-            // Resize and encode
-            let resizedImage = resizeToValidDimensions(trainingImage.image)
+            // Resize and encode with optional max resolution limit
+            let resizedImage = resizeToValidDimensions(trainingImage.image, maxResolution: maxResolution)
             let imageArray = cgImageToMLXArray(resizedImage)
             let latent = try encodeImageToLatent(imageArray, vae: vae)
 
@@ -650,6 +672,7 @@ extension LoRATrainingHelper {
     ///   - vae: VAE encoder
     ///   - textEncoder: Text encoder
     ///   - triggerWord: Optional trigger word
+    ///   - maxResolution: Optional maximum resolution (e.g., 768). RECOMMENDED to prevent OOM.
     ///   - progressCallback: Optional progress callback
     /// - Returns: Tuple of cached latents and embeddings
     public func prepareTrainingData(
@@ -657,6 +680,7 @@ extension LoRATrainingHelper {
         vae: AutoencoderKLFlux2,
         textEncoder: TrainingTextEncoder,
         triggerWord: String? = nil,
+        maxResolution: Int? = nil,
         progressCallback: ((Int, Int) -> Void)? = nil
     ) async throws -> (latents: [CachedLatentEntry], embeddings: [String: CachedEmbeddingEntry]) {
 
@@ -684,6 +708,7 @@ extension LoRATrainingHelper {
             vae: vae,
             textEncoder: textEncoder,
             triggerWord: triggerWord,
+            maxResolution: maxResolution,
             progressCallback: progressCallback
         )
     }
