@@ -2,6 +2,10 @@
 
 This guide covers the key parameters for LoRA training with Flux.2 models.
 
+> ⚠️ **Model Compatibility Note**
+>
+> LoRA training is **fully functional on Klein 4B**. Training on larger models (Klein 9B, Dev) requires more investigation due to memory constraints. See [Issue #38](https://github.com/VincentGourbin/flux-2-swift-mlx/issues/38) for details on gradient checkpointing implementation needed for larger models. **Any help is welcome!**
+
 ## Model Comparison
 
 | Model | Parameters | VRAM (8-bit) | Training Speed | Quality |
@@ -257,7 +261,7 @@ Increase `diff_output_preservation_multiplier` (try 1.5 or 2.0) or ensure your c
 - For Dev: limit resolutions to 512 only
 - Disable DOP for larger models (Klein 9B, Dev)
 
-> **Note:** `gradient_checkpointing` config option exists but is **not yet implemented**. It requires layer-wise checkpointing in the transformer model.
+> **Note:** `gradient_checkpointing` config option exists but is **not yet implemented**. It requires layer-wise checkpointing in the transformer model. See [Issue #38](https://github.com/VincentGourbin/flux-2-swift-mlx/issues/38) for progress and to contribute.
 
 ---
 

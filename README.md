@@ -26,6 +26,7 @@ A native Swift implementation of [Flux.2](https://blackforestlabs.ai/) image gen
 - **Multi-Image Conditioning**: Combine elements from up to 3 reference images
 - **Prompt Upsampling**: Enhance prompts with Mistral/Qwen3 before generation
 - **LoRA Support**: Load and apply LoRA adapters for style transfer
+- **LoRA Training**: Train your own LoRAs on Apple Silicon ([guide](docs/examples/TRAINING_GUIDE.md))
 - **CLI Tool**: Full-featured command-line interface (`Flux2CLI`)
 - **macOS App**: Demo SwiftUI application (`Flux2App`) with T2I, I2I, and chat
 
@@ -173,6 +174,7 @@ Text encoding uses [Mistral Small 3.2](https://github.com/VincentGourbin/mistral
 - **Dev Performance**: Generation takes ~35 min for 1024x1024 images (use Klein for faster results)
 - **Dev Memory**: Requires 64GB+ unified memory (Klein 4B works with 16GB)
 - **Klein 9B**: Only bf16 available (no quantized variants yet)
+- **LoRA Training**: Fully functional on Klein 4B. Larger models (Klein 9B with DOP, Dev) require [gradient checkpointing](https://github.com/VincentGourbin/flux-2-swift-mlx/issues/38) not yet implemented — contributions welcome!
 
 ## Roadmap
 
@@ -185,13 +187,16 @@ See [GitHub Issues](https://github.com/VincentGourbin/flux-2-swift-mlx/issues) f
 - [x] Flux.2 Klein 4B (4B, ~26s, Apache 2.0)
 - [x] Flux.2 Klein 9B (9B, ~62s, non-commercial)
 - [x] LoRA adapter support
+- [x] LoRA training (Klein 4B, [see guide](docs/examples/TRAINING_GUIDE.md))
 - [x] Demo SwiftUI application (`Flux2App`)
+- [ ] Gradient checkpointing for larger model training ([#38](https://github.com/VincentGourbin/flux-2-swift-mlx/issues/38))
 - [ ] Performance optimizations
 
 ## Documentation
 
 - [CLI Documentation](docs/CLI.md) - Command-line interface usage
 - [LoRA Guide](docs/LoRA.md) - LoRA adapter configuration and usage
+- [LoRA Training Guide](docs/examples/TRAINING_GUIDE.md) - Train your own LoRAs
 - [Text Encoders](docs/TextEncoders.md) - FluxTextEncoders library API and CLI
 - [Flux2App Guide](docs/Flux2App.md) - Demo macOS application
 
