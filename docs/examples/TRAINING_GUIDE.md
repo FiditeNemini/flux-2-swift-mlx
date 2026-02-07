@@ -180,7 +180,24 @@ training:
 - Best loss: 0.24 at step 244
 - DOP verified: trigger shows statue, no-trigger shows real cat
 
-See `docs/examples/cat-toy-results/` for learning curve and progression images.
+#### Learning Curve
+
+![Learning Curve](cat-toy-results/learning_curve.svg)
+
+#### DOP in Action: With vs Without Trigger Word
+
+The images below demonstrate DOP working correctly. **With trigger** shows the learned subject (cat-toy statue), while **without trigger** shows a normal cat (base model behavior preserved).
+
+| Step | With Trigger (`sks cat`) | Without Trigger (`cat`) |
+|------|--------------------------|-------------------------|
+| 0 (baseline) | ![](cat-toy-results/progression/step_000_trigger.png) | ![](cat-toy-results/progression/step_000_notrigger.png) |
+| 125 | ![](cat-toy-results/progression/step_125_trigger.png) | ![](cat-toy-results/progression/step_125_notrigger.png) |
+| 250 (final) | ![](cat-toy-results/progression/step_250_trigger.png) | ![](cat-toy-results/progression/step_250_notrigger.png) |
+
+**Key observations:**
+- **Step 0**: Both show generic cats (no LoRA applied yet)
+- **Step 125**: Trigger image starts showing the statue, non-trigger still shows real cat
+- **Step 250**: Trigger clearly shows cat-toy statue, non-trigger preserved as real cat → **DOP works!**
 
 ### Subject LoRA on Klein 9B - Optimized DOP
 
