@@ -35,3 +35,6 @@ datasets/
 groot_training_ostris/
 flux2
 loras/
+
+# Serena MCP
+.serena/
