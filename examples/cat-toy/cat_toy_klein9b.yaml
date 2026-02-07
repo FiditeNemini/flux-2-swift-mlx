@@ -55,7 +55,7 @@ loss:
 # MEMORY OPTIMIZATION
 # =============================================================================
 memory:
-  gradient_checkpointing: true
+  gradient_checkpointing: false  # NOT YET IMPLEMENTED - Klein 9B + DOP causes OOM
   cache_latents: true
   bucketing:
     enabled: true

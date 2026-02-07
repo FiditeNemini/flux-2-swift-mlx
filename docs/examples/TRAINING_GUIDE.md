@@ -251,11 +251,13 @@ Increase `diff_output_preservation_multiplier` (try 1.5 or 2.0) or ensure your c
 ### Out of memory
 
 - Use smaller batch size (1)
-- Enable gradient checkpointing
 - Use smaller model (Klein 4B)
 - Reduce rank (16 instead of 32)
 - For Dev: use `target_layers: attention` instead of `all`
 - For Dev: limit resolutions to 512 only
+- Disable DOP for larger models (Klein 9B, Dev)
+
+> **Note:** `gradient_checkpointing` config option exists but is **not yet implemented**. It requires layer-wise checkpointing in the transformer model.
 
 ---
 
