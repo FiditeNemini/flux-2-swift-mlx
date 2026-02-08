@@ -691,69 +691,123 @@ public class Flux2WeightLoader {
             flatParameters[key] = value
         }
 
-        var updates: [String: MLXArray] = [:]
         var mergedCount = 0
         var notFoundCount = 0
 
         Flux2Debug.log("[LoRA] Merging weights into transformer...")
 
+        // Group LoRA layer paths by block prefix for batched updates.
+        // This reduces peak memory from ~model_size to ~block_size (~98% reduction)
+        // by applying model.update() + eval() per batch instead of accumulating all updates.
+        let batches = groupLoRALayersByBlock(loraManager.loadedLayerPaths)
+        Flux2Debug.log("[LoRA] Processing \(loraManager.loadedLayerPaths.count) layers in \(batches.count) batches")
+
         var dtypeLogged = false
 
-        // Iterate through all LoRA pairs
-        for layerPath in loraManager.loadedLayerPaths {
-            let pairs = loraManager.getLoRAPairs(for: layerPath)
-            guard !pairs.isEmpty else { continue }
+        for (_, layerPaths) in batches {
+            var updates: [String: MLXArray] = [:]
 
-            // The layer path needs ".weight" suffix to match model parameters
-            let weightKey = layerPath + ".weight"
+            for layerPath in layerPaths {
+                let pairs = loraManager.getLoRAPairs(for: layerPath)
+                guard !pairs.isEmpty else { continue }
 
-            guard let originalWeight = flatParameters[weightKey] else {
-                notFoundCount += 1
-                if notFoundCount <= 10 {
-                    Flux2Debug.log("[LoRA] Warning: No weight found for layer: \(weightKey)")
-                }
-                continue
-            }
+                // The layer path needs ".weight" suffix to match model parameters
+                let weightKey = layerPath + ".weight"
 
-            // Start with the original weight
-            var mergedWeight = originalWeight
-
-            // Apply all LoRA pairs for this layer
-            for (scale, loraA, loraB) in pairs {
-                // Log dtypes once for debugging
-                if !dtypeLogged {
-                    Flux2Debug.log("[LoRA] dtypes - original: \(originalWeight.dtype), loraA: \(loraA.dtype), loraB: \(loraB.dtype)")
-                    dtypeLogged = true
+                guard let originalWeight = flatParameters[weightKey] else {
+                    notFoundCount += 1
+                    if notFoundCount <= 10 {
+                        Flux2Debug.log("[LoRA] Warning: No weight found for layer: \(weightKey)")
+                    }
+                    continue
                 }
 
-                // Compute LoRA delta: scale * (loraB @ loraA)
-                // loraA: [rank, in_features], loraB: [out_features, rank]
-                // Result: [out_features, in_features]
-                //
-                // IMPORTANT: Convert LoRA weights to same dtype as original weight
-                // to avoid dtype mismatches that can cause color issues
-                let loraAConverted = loraA.asType(originalWeight.dtype)
-                let loraBConverted = loraB.asType(originalWeight.dtype)
-                let loraDelta = scale * matmul(loraBConverted, loraAConverted)
+                // Start with the original weight
+                var mergedWeight = originalWeight
 
-                // Add to weight
-                mergedWeight = mergedWeight + loraDelta
+                // Apply all LoRA pairs for this layer
+                for (scale, loraA, loraB) in pairs {
+                    // Log dtypes once for debugging
+                    if !dtypeLogged {
+                        Flux2Debug.log("[LoRA] dtypes - original: \(originalWeight.dtype), loraA: \(loraA.dtype), loraB: \(loraB.dtype)")
+                        dtypeLogged = true
+                    }
+
+                    // Compute LoRA delta: scale * (loraB @ loraA)
+                    // loraA: [rank, in_features], loraB: [out_features, rank]
+                    // Result: [out_features, in_features]
+                    //
+                    // IMPORTANT: Convert LoRA weights to same dtype as original weight
+                    // to avoid dtype mismatches that can cause color issues
+                    let loraAConverted = loraA.asType(originalWeight.dtype)
+                    let loraBConverted = loraB.asType(originalWeight.dtype)
+                    let loraDelta = scale * matmul(loraBConverted, loraAConverted)
+
+                    // Add to weight
+                    mergedWeight = mergedWeight + loraDelta
+                }
+
+                updates[weightKey] = mergedWeight
+                mergedCount += 1
             }
 
-            updates[weightKey] = mergedWeight
-            mergedCount += 1
+            // Apply this batch and materialize to free intermediate arrays
+            if !updates.isEmpty {
+                _ = model.update(parameters: ModuleParameters.unflattened(updates))
+                eval(model.parameters())
+            }
         }
 
         if notFoundCount > 10 {
             Flux2Debug.log("[LoRA] ... and \(notFoundCount - 10) more layers not found")
         }
 
-        // Apply merged weights to model
-        if !updates.isEmpty {
-            _ = model.update(parameters: ModuleParameters.unflattened(updates))
-            eval(model.parameters())
-            Flux2Debug.log("[LoRA] Merged \(mergedCount) layers (\(notFoundCount) not found)")
+        Flux2Debug.log("[LoRA] Merged \(mergedCount) layers (\(notFoundCount) not found)")
+    }
+
+    /// Groups LoRA layer paths by their block prefix for batched processing.
+    ///
+    /// Examples:
+    /// - `"transformer_blocks.5.attn.to_q"` → prefix `"transformer_blocks.5"`
+    /// - `"single_transformer_blocks.12.attn.to_q"` → prefix `"single_transformer_blocks.12"`
+    /// - `"context_embedder"` → prefix `"context_embedder"`
+    ///
+    /// Returns an ordered array of (prefix, [layerPaths]) tuples preserving original order.
+    private static func groupLoRALayersByBlock(_ layerPaths: [String]) -> [(String, [String])] {
+        var groups: [(String, [String])] = []
+        var prefixIndex: [String: Int] = [:]
+
+        for path in layerPaths {
+            let prefix = blockPrefix(for: path)
+            if let idx = prefixIndex[prefix] {
+                groups[idx].1.append(path)
+            } else {
+                prefixIndex[prefix] = groups.count
+                groups.append((prefix, [path]))
+            }
         }
+
+        return groups
+    }
+
+    /// Extracts the block prefix from a LoRA layer path.
+    ///
+    /// For block-structured paths like `"transformer_blocks.5.attn.to_q"`,
+    /// returns `"transformer_blocks.5"` (the block type + index).
+    /// For non-block paths like `"context_embedder"`, returns the first component.
+    private static func blockPrefix(for layerPath: String) -> String {
+        let components = layerPath.split(separator: ".")
+
+        // Match patterns like "transformer_blocks.5" or "single_transformer_blocks.12"
+        if components.count >= 2,
+           (components[0] == "transformer_blocks" || components[0] == "single_transformer_blocks"),
+           Int(components[1]) != nil
+        {
+            return "\(components[0]).\(components[1])"
+        }
+
+        // For other paths, use the first component as the group key
+        return String(components.first ?? Substring(layerPath))
     }
 
     /// Get summary of loaded weights
