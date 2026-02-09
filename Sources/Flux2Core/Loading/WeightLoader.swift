@@ -57,7 +57,7 @@ public class Flux2WeightLoader {
     /// Supports both Diffusers format and BFL native format
     /// Note: For Diffusers quanto format, entries are removed from `weights` as they are mapped
     /// to avoid holding both raw quanto (~32GB) and dequantified float16 (~60GB) simultaneously.
-    public static func mapTransformerWeights(_ weights: inout [String: MLXArray]) -> [String: MLXArray] {
+    static func mapTransformerWeights(_ weights: inout [String: MLXArray]) -> [String: MLXArray] {
         // Detect format
         if isBFLFormat(weights) {
             Flux2Debug.log("Detected BFL native format weights")
