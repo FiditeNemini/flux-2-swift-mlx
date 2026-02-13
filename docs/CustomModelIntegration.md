@@ -9,7 +9,7 @@ Before starting, ensure your custom model:
 - Follows the Flux.2 rectified flow transformer architecture (double-stream + single-stream blocks)
 - Has weights in safetensors format (BFL native or Diffusers naming)
 - Has a compatible text encoder that produces fixed-dimension embeddings
-- Is hosted on HuggingFace (or available as local safetensors files)
+- Is hosted on HuggingFace or available as local safetensors files
 
 ## Architecture Overview
 
@@ -119,6 +119,77 @@ extension Flux2TransformerConfig {
 | `axes_dims_rope` | `axesDimsRope` | [32,32,32,32] |
 
 Alternatively, you can load it at runtime via `Flux2TransformerConfig.load(from: configURL)` which reads `config.json` directly.
+
+#### Deriving Architecture Parameters from an Arbitrary Model
+
+If you have a model's safetensors files but no `config.json`, you can derive the architecture by inspecting the weight shapes:
+
+```swift
+import MLX
+
+// Load weights and inspect shapes
+let weights = try Flux2WeightLoader.loadWeights(from: modelDirectoryURL)
+Flux2WeightLoader.summarizeWeights(weights)
+
+// This prints all key names and tensor shapes, for example:
+// transformer_blocks.0.attn.to_q.weight: [3072, 15360]
+// transformer_blocks.0.attn.to_k.weight: [3072, 15360]
+// single_transformer_blocks.0.attn.to_qkv_mlp.weight: [15360, 3072]
+```
+
+From the weight shapes, derive the config:
+
+| Weight Key | Shape | Derive |
+|---|---|---|
+| `transformer_blocks.N.attn.to_q.weight` | `[innerDim, jointAttentionDim]` | `innerDim` = rows, `jointAttentionDim` = cols |
+| Count of `transformer_blocks.N.*` | N blocks | `numLayers` = max N + 1 |
+| Count of `single_transformer_blocks.N.*` | N blocks | `numSingleLayers` = max N + 1 |
+| `innerDim` / 128 | — | `numAttentionHeads` (head dim is always 128) |
+| `time_text_embed.timestep_embedder.*` shape | `[pooledDim, ...]` | `pooledProjectionDim` |
+| Presence of `time_text_embed.guidance_embedder.*` | exists/missing | `guidanceEmbeds` = true/false |
+
+Example derivation: if `to_q.weight` has shape `[3072, 7680]`:
+- `innerDim` = 3072 → `numAttentionHeads` = 3072 / 128 = **24**
+- `jointAttentionDim` = **7680** (matches Qwen3-4B: 3 × 2560)
+
+### Loading Weights from Local Files (without HuggingFace)
+
+If your model is available as local safetensors files rather than on HuggingFace, you can load weights directly:
+
+```swift
+import Flux2Core
+import MLX
+
+// Load safetensors from a local directory
+let modelDir = URL(fileURLWithPath: "/path/to/my-custom-model/")
+
+// Option 1: Load a single safetensors file
+let weights = try Flux2WeightLoader.loadWeights(from: modelDir.appendingPathComponent("model.safetensors"))
+
+// Option 2: Load from a directory containing multiple sharded files (model-00001-of-00003.safetensors, etc.)
+let weights = try Flux2WeightLoader.loadWeights(from: modelDir)
+
+// Create the transformer with your config
+let transformer = Flux2Transformer2DModel(config: .myCustom)
+
+// Apply weights (auto-detects BFL or Diffusers format and maps them)
+try Flux2WeightLoader.applyTransformerWeights(&weights, to: transformer)
+
+// Optionally quantize on-the-fly
+MLX.quantize(model: transformer, groupSize: 64, bits: 8)  // qint8
+```
+
+For local models, you can bypass the download system entirely by providing the path directly to `Flux2WeightLoader`. This is useful for:
+- Models not hosted on HuggingFace
+- Locally converted or fine-tuned models
+- Models in private repositories
+- Testing custom architectures during development
+
+To integrate local models into the full pipeline (so they work with `Flux2Pipeline`), you can either:
+
+1. **Place files in the cache directory**: Copy your safetensors to `~/Library/Caches/models/your-model-name/`. The `findModelPath(for:)` function checks this location.
+
+2. **Override `loadTransformer()` in the pipeline**: Add a case in `Flux2Pipeline.loadTransformer()` that reads from a local path instead of using the downloader.
 
 ### Step 3: Register Download Variants
 

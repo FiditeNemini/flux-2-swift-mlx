@@ -89,6 +89,104 @@ Measured transformer memory per quantization level:
 | Klein 9B | 17.3 GB | 9.2 GB | 4.9 GB |
 | Dev (32B) | 61.5 GB | 32.7 GB | 17.3 GB |
 
+## Klein 9B with 8-bit Quantization
+
+Klein 9B provides better quality than Klein 4B. With qint8, it fits comfortably on 32GB+ Macs.
+
+### Basic Klein 9B qint8 Usage
+
+```swift
+import Flux2Core
+
+// Klein 9B with 8-bit quantization (balanced preset: 8bit text + qint8 transformer)
+let pipeline = Flux2Pipeline(
+    model: .klein9B,
+    quantization: .balanced  // qint8 transformer (~9.2 GB) + 8bit Qwen3-8B (~8 GB)
+)
+try await pipeline.loadModels()
+
+// Generate with Klein 9B's optimal parameters
+let image = try await pipeline.generateTextToImage(
+    prompt: "a beaver building a dam in a forest stream",
+    height: 1024,
+    width: 1024,
+    steps: 4,        // Klein models are distilled — 4 steps is optimal
+    guidance: 1.0    // Klein models use guidance 1.0
+)
+```
+
+### Explicit qint8 Configuration for Klein 9B
+
+```swift
+import Flux2Core
+
+// Explicit quantization: 8-bit text encoder + qint8 transformer
+let quantConfig = Flux2QuantizationConfig(
+    textEncoder: .mlx8bit,    // Qwen3-8B at 8-bit (~8 GB)
+    transformer: .qint8       // Klein 9B transformer at qint8 (~9.2 GB, down from 17.3 GB bf16)
+)
+
+let pipeline = Flux2Pipeline(
+    model: .klein9B,
+    quantization: quantConfig
+)
+try await pipeline.loadModels()
+
+let image = try await pipeline.generateTextToImage(
+    prompt: "a detailed landscape with mountains and a lake",
+    height: 1024,
+    width: 1024,
+    steps: 4,
+    guidance: 1.0,
+    seed: 42
+)
+```
+
+### Klein 9B Memory Breakdown
+
+The pipeline uses two-phase loading, so text encoder and transformer are never in memory simultaneously:
+
+| Phase | Components | Memory |
+|-------|-----------|--------|
+| Phase 1 — Text Encoding | Qwen3-8B (8-bit) | ~8 GB |
+| *(text encoder unloaded)* | | |
+| Phase 2 — Generation | Klein 9B (qint8: 9.2 GB) + VAE (3 GB) | ~12 GB |
+| **Peak** | **Maximum of phase 1 or phase 2** | **~12 GB** |
+
+### Even More Memory-Efficient Klein 9B
+
+```swift
+// 4-bit text encoder + qint8 transformer for tighter memory
+let tightConfig = Flux2QuantizationConfig(
+    textEncoder: .mlx4bit,    // Qwen3-8B at 4-bit (~4 GB)
+    transformer: .qint8       // Klein 9B at qint8 (~9.2 GB)
+)
+
+let pipeline = Flux2Pipeline(model: .klein9B, quantization: tightConfig)
+try await pipeline.loadModels()
+```
+
+### Klein 9B with int4 for Minimum Memory
+
+```swift
+// int4 quantization reduces transformer memory by 72%
+let minimalConfig = Flux2QuantizationConfig(
+    textEncoder: .mlx4bit,    // Qwen3-8B at 4-bit (~4 GB)
+    transformer: .int4        // Klein 9B at int4 (~4.9 GB, down from 17.3 GB)
+)
+
+let pipeline = Flux2Pipeline(model: .klein9B, quantization: minimalConfig)
+try await pipeline.loadModels()
+
+let image = try await pipeline.generateTextToImage(
+    prompt: "a cat on a sunny windowsill",
+    height: 1024,
+    width: 1024,
+    steps: 4,
+    guidance: 1.0
+)
+```
+
 ## Text-to-Image
 
 ### Basic Generation
@@ -287,27 +385,171 @@ touch output/my-lora/.stop
 
 ## Memory Management
 
-The pipeline uses two-phase loading — text encoder loads first (then unloads), then transformer + VAE load for generation. This allows running on machines with less RAM than the total model size.
+### Two-Phase Loading Architecture
+
+The pipeline **never loads text encoder and transformer simultaneously**. This is the key to fitting large models on limited RAM:
+
+1. **Phase 1 — Text Encoding**: Load text encoder → encode prompt → unload text encoder → free memory
+2. **Phase 2 — Image Generation**: Load transformer + VAE → denoise → decode → output image
+
+This means peak memory is the **maximum** of phase 1 or phase 2, not their sum.
+
+### Total Memory Requirements per Model
+
+| Model | Quantization | Phase 1 (Text) | Phase 2 (Transformer + VAE) | Peak Memory |
+|-------|-------------|----------------|----------------------------|-------------|
+| Klein 4B | int4 | ~4 GB | ~5 GB | ~8 GB |
+| Klein 4B | qint8 | ~4 GB | ~7 GB | ~10 GB |
+| Klein 4B | bf16 | ~8 GB | ~10 GB | ~16 GB |
+| Klein 9B | int4 | ~4 GB | ~8 GB | ~16 GB |
+| Klein 9B | qint8 | ~8 GB | ~12 GB | ~24 GB |
+| Klein 9B | bf16 | ~8 GB | ~20 GB | ~32 GB |
+| Dev (32B) | int4 | ~14 GB | ~20 GB | ~32 GB |
+| Dev (32B) | qint8 | ~25 GB | ~36 GB | ~64 GB |
+| Dev (32B) | bf16 | ~25 GB | ~65 GB | ~96 GB |
+
+### Recommended Quantization for Available RAM
 
 ```swift
 import Flux2Core
 
-// Check system memory
+// Automatic recommendation based on system RAM
 let memoryManager = Flux2MemoryManager.shared
-print("Physical RAM: \(memoryManager.physicalMemoryGB) GB")
+print("System RAM: \(memoryManager.physicalMemoryGB) GB")
 
-// Get recommended quantization for available RAM
 let recommended = memoryManager.recommendedConfig()
+let pipeline = Flux2Pipeline(model: .klein9B, quantization: recommended)
+```
 
-// Create pipeline with memory-optimized settings
+| Available RAM | Recommended Model | Recommended Quantization |
+|---------------|-------------------|--------------------------|
+| 8–16 GB | Klein 4B | `.ultraMinimal` (4bit text + int4 transformer) |
+| 16–24 GB | Klein 4B or Klein 9B | `.memoryEfficient` (4bit text + qint8 transformer) |
+| 24–48 GB | Klein 9B | `.balanced` (8bit text + qint8 transformer) |
+| 48–64 GB | Dev | `.memoryEfficient` (4bit text + qint8 transformer) |
+| 64–96 GB | Dev | `.balanced` (8bit text + qint8 transformer) |
+| 96+ GB | Dev | `.highQuality` (bf16 text + bf16 transformer) |
+
+### Handling Out-of-Memory (OOM) Scenarios
+
+```swift
+import Flux2Core
+
+// Strategy 1: Use more aggressive quantization
 let pipeline = Flux2Pipeline(
     model: .klein4B,
-    quantization: recommended
+    quantization: .ultraMinimal  // 4bit text + int4 transformer
 )
 
-// Clear memory when done
-await pipeline.clearAll()
+// Strategy 2: Use memory optimization during denoising
+let pipeline = Flux2Pipeline(
+    model: .klein9B,
+    quantization: .balanced,
+    memoryOptimization: .aggressive  // Periodic eval + cache clearing during denoising
+)
+
+// Strategy 3: Reduce image resolution (memory scales with pixel count)
+let image = try await pipeline.generateTextToImage(
+    prompt: "a landscape",
+    height: 512,   // 4x less memory than 1024x1024
+    width: 512,
+    steps: 4,
+    guidance: 1.0
+)
+
+// Strategy 4: Clear GPU cache between generations
+pipeline.clearCacheEveryNSteps = 2  // More frequent cache clearing
+await pipeline.clearAll()           // Full cleanup between generations
 ```
+
+### MemoryOptimizationConfig for Denoising
+
+Controls how often the computation graph is evaluated during denoising steps, trading speed for memory:
+
+```swift
+import Flux2Core
+
+// Presets (from fastest to most memory-efficient):
+let light = MemoryOptimizationConfig.light           // Every 16 blocks
+let moderate = MemoryOptimizationConfig.moderate      // Every 8 blocks (recommended)
+let aggressive = MemoryOptimizationConfig.aggressive  // Every 4 blocks + cache clearing
+let ultraLow = MemoryOptimizationConfig.ultraLowMemory // Every 2 blocks + cache clearing
+
+let pipeline = Flux2Pipeline(
+    model: .dev,
+    quantization: .balanced,
+    memoryOptimization: .aggressive
+)
+```
+
+| System RAM | Recommended Preset |
+|---|---|
+| < 32 GB | `.ultraLowMemory` |
+| 32–64 GB | `.aggressive` |
+| 64–96 GB | `.moderate` |
+| 96+ GB | `.light` or `.disabled` |
+
+### Monitoring GPU Memory
+
+```swift
+import MLX
+
+// Real-time Metal GPU memory stats
+print("Active: \(MLX.Memory.activeMemory / 1_073_741_824) GB")
+print("Peak: \(MLX.Memory.peakMemory / 1_073_741_824) GB")
+print("Cache: \(MLX.Memory.cacheMemory / 1_073_741_824) GB")
+
+// Set GPU cache limit
+MLX.Memory.cacheLimit = 2 * 1_073_741_824  // 2 GB cache limit
+
+// Clear GPU cache
+MLX.Memory.clearCache()
+
+// Reset peak counter before a specific operation
+MLX.Memory.peakMemory = 0
+// ... run generation ...
+print("Operation peak: \(MLX.Memory.peakMemory / 1_073_741_824) GB")
+```
+
+### Pre-Generation Memory Checks
+
+```swift
+import Flux2Core
+
+let memoryManager = Flux2MemoryManager.shared
+
+// Check before text encoding phase
+let textCheck = memoryManager.checkTextEncodingPhase(config: quantization)
+if !textCheck.isOK {
+    print("Warning: \(textCheck.suggestion)")
+}
+
+// Check before generation phase
+let genCheck = memoryManager.checkImageGenerationPhase(config: quantization)
+if !genCheck.isOK {
+    print("Warning: \(genCheck.suggestion)")
+}
+
+// Check image dimensions
+let sizeCheck = memoryManager.checkImageSize(width: 1024, height: 1024)
+```
+
+### Training Memory Optimization
+
+For LoRA training, gradient checkpointing reduces activation memory by ~50% at the cost of ~2x slower forward passes:
+
+```swift
+let config = LoRATrainingConfig(
+    datasetPath: datasetURL,
+    gradientCheckpointing: true,  // Reduces memory ~50%, ~2x slower
+    outputPath: outputURL
+)
+```
+
+| Model | Without Checkpointing | With Checkpointing | Reduction |
+|-------|----------------------|-------------------|-----------|
+| Klein 4B | ~60 GB | ~42 GB | -30% |
+| Klein 9B | N/A (OOM) | ~94 GB | Required |
 
 ## CLI Usage
 
